@@ -12,6 +12,7 @@ if base_path[-1] != "/":
 base_url = "https://download.pytorch.org/"
 compute_platforms = ["cpu-cxx11-abi", "cpu_pypi_pkg"]
 threads_count = 16 #线程数量
+user_agent = "Mozilla/5.0 (compatible; sync-pytorch/0.1; +https://github.com/seu-mirrors/sync-pytorch)"
 
 is_whl_processed = set()
 re_pattern = re.compile(r"<a href=\"(\S*)\".*>(\S*)</a>")
@@ -22,6 +23,7 @@ thread_lock = threading.Lock()
 session = requests.Session()
 session.mount('http://', HTTPAdapter(max_retries=10))
 session.mount('https://', HTTPAdapter(max_retries=10))
+session.headers.update({"User-Agent": user_agent})
 
 class search_metadata_thread(threading.Thread):
     def __init__(self, thread_index, index_begin, index_end):
@@ -211,7 +213,7 @@ def export_aria2c():
             fhandle.write(info["url"] + "\n" + "    out=" + info["local_path"] + "\n")
 
 def perform_download():
-    os.system(f"aria2c --check-certificate=false --user-agent=\"mirrorsync/1.0\" --log-level=info --file-allocation=falloc --lowest-speed-limit=1K --check-integrity -c -l {base_path}aria2.log -i {base_path}packagelist.txt")
+    os.system(f"aria2c --check-certificate=false --user-agent=\"{user_agent}\" --log-level=info --file-allocation=falloc --lowest-speed-limit=1K --check-integrity -c -l {base_path}aria2.log -i {base_path}packagelist.txt")
 
 def main():
     get_platforms()
