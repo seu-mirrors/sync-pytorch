@@ -83,12 +83,12 @@ class update_package_thread(threading.Thread):
                                 sha256 = split[1]
                             self.fetch_list.append({
                                 "url" : whl_url,
-                                "local_path" : base_path + "whl/" + whl_name,
+                                "local_path" : "whl/" + whl_name,
                                 # "sha256" : sha256
                             })
                             self.search_metadata_list.append({
                                 "url" : whl_url + ".metadata",
-                                "local_path" : base_path + "whl/" + whl_name + ".metadata"
+                                "local_path" : "whl/" + whl_name + ".metadata"
                             })
                         search_pos = res.span(0)[1]
                         res = re_pattern.search(package_html, search_pos)
