@@ -44,7 +44,7 @@ class search_metadata_thread(threading.Thread):
             except Exception as err:
                 print("network error")
                 print(err)
-                exit(1)
+                os._exit(1)
             print(f"thread {self.thread_index} : {i - self.index_begin + 1} / {self.index_end - self.index_begin}")
 
         print("merging")
@@ -103,7 +103,7 @@ class update_package_thread(threading.Thread):
             except Exception as err:
                 print("network error")
                 print(err)
-                exit(1)
+                os._exit(1)
         
         print("merging")
         thread_lock.acquire()
@@ -161,6 +161,7 @@ def update_index(platform = ""):
     except Exception as err:
         print("error")
         print(err)
+        os._exit(1)
 
 def get_platforms():
     response = session.get("https://raw.githubusercontent.com/pytorch/pytorch.github.io/refs/heads/site/assets/quick-start-module.js")
