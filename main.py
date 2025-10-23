@@ -19,6 +19,7 @@ re_pattern = re.compile(r"<a href=\"(\S*)\".*>(\S*)</a>")
 fetch_list = []
 search_metadata_list = []
 thread_lock = threading.Lock()
+pkglist = "{base_path}packagelist.txt"
 
 session = requests.Session()
 session.mount('http://', HTTPAdapter(max_retries=10))
@@ -210,13 +211,26 @@ see also <a href="..">other available indexes</a>
             fhandle.write(index_html)
 
 def export_aria2c():
-    with open(base_path + "packagelist.txt", "w") as fhandle:
+    with open(pkglist, "w") as fhandle:
         for info in fetch_list:
             fhandle.write(info["url"] + "\n" + "    out=" + info["local_path"] + "\n")
 
 def perform_download():
     truncate(f"{base_path}aria2.log")
-    os.system(f"aria2c --check-certificate=false --user-agent=\"{user_agent}\" --log-level=info --file-allocation=falloc --lowest-speed-limit=1K --check-integrity -c -l {base_path}aria2.log -i {base_path}packagelist.txt")
+    os.system(f"aria2c --check-certificate=false --user-agent=\"{user_agent}\" --log-level=info --file-allocation=falloc --lowest-speed-limit=1K --check-integrity -c -l {base_path}aria2.log -i {pkglist}")
+
+def summary():
+    with open(f"{base_path}summary.txt", "w") as out:
+        for d in sorted(glob("{base_path}whl/*/simple")):
+            if os.path.isdir(d):
+                count = len(os.listdir(d))
+                out.write(f"{count} {os.path.relpath(d)}\n")
+
+        if os.path.exists(pkglist):
+            with open(pkglist) as f:
+                lines = sum(1 if i.startswith("http") else 0 for i in f)
+            out.write(f"{lines} {os.path.relpath(pkglist)}\n")
+
 
 def main():
     get_platforms()
@@ -225,6 +239,7 @@ def main():
         update_index(platform)
     export_aria2c()
     perform_download()
+    summary()
 
 if __name__ == "__main__":
     main()
