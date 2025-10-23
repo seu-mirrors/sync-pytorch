@@ -20,7 +20,7 @@ re_pattern = re.compile(r"<a href=\"(\S*)\".*>(\S*)</a>")
 fetch_list = []
 search_metadata_list = []
 thread_lock = threading.Lock()
-pkglist = "{base_path}packagelist.txt"
+pkglist = os.path.join(base_path, "packagelist.txt")
 
 session = requests.Session()
 session.mount('http://', HTTPAdapter(max_retries=10))
@@ -222,7 +222,7 @@ def perform_download():
 
 def summary():
     with open(f"{base_path}summary.txt", "w") as out:
-        for d in sorted(glob("{base_path}whl/*/simple")):
+        for d in sorted(glob(f"{base_path}whl/*/simple")):
             if os.path.isdir(d):
                 count = len(os.listdir(d))
                 out.write(f"{count} {os.path.relpath(d)}\n")
