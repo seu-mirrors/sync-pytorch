@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
 import requests
+import urllib
+import pickle # todo: 加入签名保证安全性
 import os
+import sys
 import re
 import json
 import threading
 from glob import glob
 from requests.adapters import HTTPAdapter
+from tqdm import tqdm
 
 base_path = os.getenv("TUNASYNC_WORKING_DIR", default = "./sync_dir/") #同步路径
 if base_path[-1] != "/":
@@ -15,11 +19,14 @@ compute_platforms = ["cpu-cxx11-abi", "cpu_pypi_pkg"]
 threads_count = 16 #线程数量
 user_agent = "Mozilla/5.0 (compatible; sync-pytorch/0.1; +https://github.com/seu-mirrors/sync-pytorch)"
 
+existed_files = {} # name : path
+current_files = {} # name : path
 is_whl_processed = set()
 re_pattern = re.compile(r"<a href=\"(\S*)\".*>(\S*)</a>")
 fetch_list = []
 search_metadata_list = []
-thread_lock = threading.Lock()
+fetch_list_lock = threading.Lock()
+whl_set_lock = threading.Lock()
 pkglist = os.path.join(base_path, "packagelist.txt")
 
 session = requests.Session()
@@ -37,7 +44,7 @@ class search_metadata_thread(threading.Thread):
         self.index_end = index_end
         self.fetch_list = []
     def run(self):
-        for i in range(self.index_begin, self.index_end):
+        for i in tqdm(range(self.index_begin, self.index_end), desc = f"thread #{self.thread_index}", leave = False):
             try:
                 if session.head(search_metadata_list[i]["url"]).status_code == 200:
                     self.fetch_list.append(search_metadata_list[i])
@@ -45,13 +52,9 @@ class search_metadata_thread(threading.Thread):
                 print("network error")
                 print(err)
                 os._exit(1)
-            print(f"thread {self.thread_index} : {i - self.index_begin + 1} / {self.index_end - self.index_begin}")
 
-        print("merging")
-        thread_lock.acquire()
-        fetch_list.extend(self.fetch_list)
-        thread_lock.release()
-        print("thread complete")
+        with fetch_list_lock:
+            fetch_list.extend(self.fetch_list)
 
 class update_package_thread(threading.Thread):
     def __init__(self, thread_index, package_info_list, index_begin, index_end, local_dir):
@@ -65,7 +68,7 @@ class update_package_thread(threading.Thread):
         self.fetch_list = []
         self.search_metadata_list = []
         local_dir = self.local_dir
-        for index in range(self.index_begin, self.index_end):
+        for index in tqdm(range(self.index_begin, self.index_end), desc = f"thread #{self.thread_index}", leave = False):
             package_info = self.package_info_list[index]
             package_url = package_info["url"]
             try:
@@ -80,7 +83,8 @@ class update_package_thread(threading.Thread):
                     while res:
                         whl_name = res.group(2)
                         if not whl_name in is_whl_processed:
-                            is_whl_processed.add(whl_name)
+                            with whl_set_lock:
+                                is_whl_processed.add(whl_name)
                             whl_url = base_url[0:-1] + res.group(1)
                             sha256 = None
                             if "#" in whl_url:
@@ -88,13 +92,15 @@ class update_package_thread(threading.Thread):
                                 whl_url = split[0]
                                 sha256 = split[1]
                             self.fetch_list.append({
+                                "name" : whl_name,
                                 "url" : whl_url,
-                                "local_path" : "whl/" + whl_name,
-                                # "sha256" : sha256
+                                "local_path" : base_path + "whl/" + whl_name,
+                                "sha256" : sha256
                             })
                             self.search_metadata_list.append({
+                                "name" : whl_name + ".metadata",
                                 "url" : whl_url + ".metadata",
-                                "local_path" : "whl/" + whl_name + ".metadata"
+                                "local_path" : base_path + "whl/" + whl_name + ".metadata"
                             })
                         search_pos = res.span(0)[1]
                         res = re_pattern.search(package_html, search_pos)
@@ -105,12 +111,16 @@ class update_package_thread(threading.Thread):
                 print(err)
                 os._exit(1)
         
-        print("merging")
-        thread_lock.acquire()
-        fetch_list.extend(self.fetch_list)
-        search_metadata_list.extend(self.search_metadata_list)
-        thread_lock.release()
-        print("thread complete")
+        with fetch_list_lock:
+            fetch_list.extend(self.fetch_list)
+            search_metadata_list.extend(self.search_metadata_list)
+
+def load_existed_files():
+    global existed_files
+    existed_files_info_path = os.path.join(base_path, "existed_files.bin")
+    if os.path.exists(existed_files_info_path) and os.path.isfile(existed_files_info_path):
+        with open(existed_files_info_path, "rb") as fhandle:
+            existed_files = pickle.load(fhandle)
 
 def update_index(platform = ""):
     os.makedirs(base_path + "whl/", 0o755, True)
@@ -126,6 +136,7 @@ def update_index(platform = ""):
                 fhandle.write(projects_list_html)
 
             # 获取包列表
+            print("fetch package list")
             package_info_list = []
             search_pos = 0
             res = re_pattern.search(projects_list_html, search_pos)
@@ -140,6 +151,7 @@ def update_index(platform = ""):
             package_counts = len(package_info_list)
             print(f"platform: {platform}    " + "package counts: " + str(package_counts))
 
+            print("fetch file list")
             threads = []
             search_metadata_list.clear()
             package_per_thread = package_counts // threads_count
@@ -150,6 +162,7 @@ def update_index(platform = ""):
             for t in threads:
                 t.join()
 
+            print("fetch file metadata")
             threads.clear()
             search_metadata_per_thread = len(search_metadata_list) // threads_count
             for i in range(0, threads_count, 1):
@@ -212,10 +225,23 @@ see also <a href="..">other available indexes</a>
 </html>'''
             fhandle.write(index_html)
 
+def remove_outdated_files():
+    outdated_files = []
+    for info in fetch_list:
+        current_files[info["name"]] = info["local_path"]
+    for existed_file_name, existed_file_path in existed_files.items():
+        if not existed_file_name in current_files:
+            outdated_files.append(existed_file_path)
+    for path in outdated_files:
+        os.remove(path)
+
 def export_aria2c():
     with open(pkglist, "w") as fhandle:
         for info in fetch_list:
-            fhandle.write(info["url"] + "\n" + "    out=" + info["local_path"] + "\n")
+            if not info["name"] in existed_files:
+                fhandle.write(info["url"] + "\n" + "    out=" + info["local_path"] + "\n")
+                if "sha256" in info and info["sha256"]:
+                    fhandle.write("    checksum=sha-256=" + info["sha256"] + "\n")
 
 def perform_download():
     truncate(f"{base_path}aria2.log")
@@ -234,13 +260,22 @@ def summary():
             with open(pkglist) as f:
                 lines = sum(1 if i.startswith("http") else 0 for i in f)
             out.write(f"{lines} {os.path.relpath(pkglist)}\n")
-
+    
+    files_info_path = os.path.join(base_path, "existed_files.bin")
+    if os.path.exists(files_info_path):
+        if os.path.exists(files_info_path + ".old"):
+            os.remove(files_info_path + ".old")
+        os.rename(files_info_path, files_info_path + ".old")
+        with open(files_info_path, "wb") as fhandle:
+            pickle.dump(current_files, fhandle)
 
 def main():
     get_platforms()
     update_human_index()
+    load_existed_files()
     for platform in compute_platforms:
         update_index(platform)
+    remove_outdated_files()
     export_aria2c()
     perform_download()
     summary()
