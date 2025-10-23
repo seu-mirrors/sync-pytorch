@@ -9,7 +9,17 @@ import json
 import threading
 from glob import glob
 from requests.adapters import HTTPAdapter
-from tqdm import tqdm
+SHOW_PROGRESS = False
+
+if "--show-progress" in sys.argv and __name__ == "__main__":
+    SHOW_PROGRESS = True
+
+if SHOW_PROGRESS:
+    try:
+        from tqdm import tqdm
+    except:
+        print("tqdm not found")
+        SHOW_PROGRESS = False
 
 base_path = os.getenv("TUNASYNC_WORKING_DIR", default = "./sync_dir/") #同步路径
 if base_path[-1] != "/":
@@ -44,7 +54,12 @@ class search_metadata_thread(threading.Thread):
         self.index_end = index_end
         self.fetch_list = []
     def run(self):
-        for i in tqdm(range(self.index_begin, self.index_end), desc = f"thread #{self.thread_index}", leave = False):
+        rng = None
+        if SHOW_PROGRESS:
+            rng = tqdm(range(self.index_begin, self.index_end), desc = f"thread #{self.thread_index}", leave = False)
+        else:
+            rng = range(self.index_begin, self.index_end)
+        for i in rng:
             try:
                 if session.head(search_metadata_list[i]["url"]).status_code == 200:
                     self.fetch_list.append(search_metadata_list[i])
@@ -65,10 +80,15 @@ class update_package_thread(threading.Thread):
         self.index_end = index_end
         self.local_dir = local_dir
     def run(self):
+        rng = None
+        if SHOW_PROGRESS:
+            rng = tqdm(range(self.index_begin, self.index_end), desc = f"thread #{self.thread_index}", leave = False)
+        else:
+            rng = range(self.index_begin, self.index_end)
         self.fetch_list = []
         self.search_metadata_list = []
         local_dir = self.local_dir
-        for index in tqdm(range(self.index_begin, self.index_end), desc = f"thread #{self.thread_index}", leave = False):
+        for index in rng:
             package_info = self.package_info_list[index]
             package_url = package_info["url"]
             try:
