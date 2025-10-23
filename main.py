@@ -219,7 +219,9 @@ def export_aria2c():
 
 def perform_download():
     truncate(f"{base_path}aria2.log")
-    os.system(f"aria2c --check-certificate=false --user-agent=\"{user_agent}\" --log-level=info --file-allocation=falloc --lowest-speed-limit=1K --check-integrity -c -l {base_path}aria2.log -i {pkglist}")
+    status = os.system(f"aria2c --check-certificate=false --user-agent=\"{user_agent}\" --log-level=info --file-allocation=falloc --lowest-speed-limit=1K --check-integrity -c -l {base_path}aria2.log -i {pkglist}")
+    if status != 0:
+        os._exit(os.waitstatus_to_exitcode(status))
 
 def summary():
     with open(f"{base_path}summary.txt", "w") as out:
