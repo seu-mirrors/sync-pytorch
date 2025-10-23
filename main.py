@@ -25,6 +25,8 @@ session.mount('http://', HTTPAdapter(max_retries=10))
 session.mount('https://', HTTPAdapter(max_retries=10))
 session.headers.update({"User-Agent": user_agent})
 
+truncate = lambda path: open(path, "w").close()
+
 class search_metadata_thread(threading.Thread):
     def __init__(self, thread_index, index_begin, index_end):
         threading.Thread.__init__(self)
@@ -213,6 +215,7 @@ def export_aria2c():
             fhandle.write(info["url"] + "\n" + "    out=" + info["local_path"] + "\n")
 
 def perform_download():
+    truncate(f"{base_path}aria2.log")
     os.system(f"aria2c --check-certificate=false --user-agent=\"{user_agent}\" --log-level=info --file-allocation=falloc --lowest-speed-limit=1K --check-integrity -c -l {base_path}aria2.log -i {base_path}packagelist.txt")
 
 def main():
