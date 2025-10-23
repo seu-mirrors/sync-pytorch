@@ -4,6 +4,7 @@ import os
 import re
 import json
 import threading
+from glob import glob
 from requests.adapters import HTTPAdapter
 
 base_path = os.getenv("TUNASYNC_WORKING_DIR", default = "./sync_dir/") #同步路径
