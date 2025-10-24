@@ -116,13 +116,13 @@ class update_package_thread(threading.Thread):
                             self.fetch_list.append({
                                 "name" : whl_name,
                                 "url" : whl_url,
-                                "local_path" : os.path.join(base_path, "whl/", whl_name),
+                                "local_path" : os.path.join(base_path, "whl", whl_name),
                                 "sha256" : sha256
                             })
                             self.search_metadata_list.append({
                                 "name" : whl_name + ".metadata",
                                 "url" : whl_url + ".metadata",
-                                "local_path" : os.path.join(base_path, "whl/", whl_name + ".metadata"),
+                                "local_path" : os.path.join(base_path, "whl", whl_name + ".metadata"),
                             })
                         search_pos = res.span(0)[1]
                         res = re_pattern.search(package_html, search_pos)
@@ -222,7 +222,7 @@ def get_platforms():
         
 def update_human_index():
     os.makedirs(os.path.join(base_path, "whl"), 0o755, True)
-    with open(os.path.join(base_path, "whl" + "index.html"), "w") as fhandle:
+    with open(os.path.join(base_path, "whl", "index.html"), "w") as fhandle:
         index_html = '''<!DOCTYPE html>
 <html>
   <body>
