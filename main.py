@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 import requests
-import urllib
+from urllib.parse import urljoin
 import pickle # todo: 加入签名保证安全性
 import os
 import sys
@@ -9,8 +9,9 @@ import json
 import threading
 from glob import glob
 from requests.adapters import HTTPAdapter
-SHOW_PROGRESS = False
+import traceback
 
+SHOW_PROGRESS = False
 if "--show-progress" in sys.argv and __name__ == "__main__":
     SHOW_PROGRESS = True
 
@@ -20,6 +21,17 @@ if SHOW_PROGRESS:
     except:
         print("tqdm not found")
         SHOW_PROGRESS = False
+
+# USE_SPDLOG = False
+# if "--spdlog" in sys.argv and __name__ == "__main__":
+#     USE_SPDLOG = True
+
+# if USE_SPDLOG:
+#     try:
+#         import spdlog
+#     except:
+#         print("spdlog not found")
+#         USE_SPDLOG = False
 
 base_path = os.getenv("TUNASYNC_WORKING_DIR", default = "./sync_dir/") #同步路径
 if base_path[-1] != "/":
@@ -66,6 +78,7 @@ class search_metadata_thread(threading.Thread):
             except Exception as err:
                 print("network error")
                 print(err)
+                traceback.print_exc()
                 os._exit(1)
 
         with fetch_list_lock:
@@ -95,8 +108,8 @@ class update_package_thread(threading.Thread):
                 package_response = session.get(package_url)
                 if package_response.status_code == 200:
                     package_html = package_response.text
-                    os.makedirs(local_dir + package_info["name"], 0o755, True)
-                    with open(local_dir + package_info["name"] + "/index.html", "w") as fhandle:
+                    os.makedirs(os.path.join(local_dir, package_info["name"]), 0o755, True)
+                    with open(os.path.join(local_dir, package_info["name"], "index.html"), "w") as fhandle:
                         fhandle.write(package_html.replace("href=\"/whl", "href=\"https://mirrors.seu.edu.cn/pytorch/whl"))
                     search_pos = 0
                     res = re_pattern.search(package_html, search_pos)
@@ -105,7 +118,7 @@ class update_package_thread(threading.Thread):
                         if not whl_name in is_whl_processed:
                             with whl_set_lock:
                                 is_whl_processed.add(whl_name)
-                            whl_url = base_url[0:-1] + res.group(1)
+                            whl_url = urljoin(base_url, res.group(1))
                             sha256 = None
                             if "#" in whl_url:
                                 split = whl_url.split("#sha256=")
@@ -114,13 +127,13 @@ class update_package_thread(threading.Thread):
                             self.fetch_list.append({
                                 "name" : whl_name,
                                 "url" : whl_url,
-                                "local_path" : base_path + "whl/" + whl_name,
+                                "local_path" : os.path.join(base_path, "whl/", whl_name),
                                 "sha256" : sha256
                             })
                             self.search_metadata_list.append({
                                 "name" : whl_name + ".metadata",
                                 "url" : whl_url + ".metadata",
-                                "local_path" : base_path + "whl/" + whl_name + ".metadata"
+                                "local_path" : os.path.join(base_path, "whl/", whl_name + ".metadata"),
                             })
                         search_pos = res.span(0)[1]
                         res = re_pattern.search(package_html, search_pos)
@@ -129,6 +142,7 @@ class update_package_thread(threading.Thread):
             except Exception as err:
                 print("network error")
                 print(err)
+                traceback.print_exc()
                 os._exit(1)
         
         with fetch_list_lock:
@@ -143,16 +157,18 @@ def load_existed_files():
             existed_files = pickle.load(fhandle)
 
 def update_index(platform = ""):
-    os.makedirs(base_path + "whl/", 0o755, True)
-    local_dir = base_path + "whl/" + platform + "/simple/"
+    os.makedirs(os.path.join(base_path, "whl"), 0o755, True)
+    local_dir = os.path.join(base_path, "whl", platform, "simple")
 
-    url = f"{base_url}whl/{platform}/"
+    url = f"{base_url}whl/"
+    if platform != "":
+        url += platform + "/"
     try:
         projects_list_response = session.get(url)
         if projects_list_response.status_code == 200:
             projects_list_html = projects_list_response.text
             os.makedirs(local_dir, 0o755, True)
-            with open(local_dir + "index.html", "w") as fhandle:
+            with open(os.path.join(local_dir, "index.html"), "w") as fhandle:
                 fhandle.write(projects_list_html)
 
             # 获取包列表
@@ -194,24 +210,30 @@ def update_index(platform = ""):
     except Exception as err:
         print("error")
         print(err)
+        traceback.print_exc()
         os._exit(1)
 
 def get_platforms():
     response = session.get("https://raw.githubusercontent.com/pytorch/pytorch.github.io/refs/heads/site/assets/quick-start-module.js")
     version_result = re.search("version_map=({.*})", response.text)
     if version_result:
-        version_map = json.loads(version_result.group(1))
-        for info in version_map["release"].values() :
-            if info[0] == "cpu":
-                compute_platforms.append("cpu")
-            elif info[0] == "cuda":
-                compute_platforms.append("cu" + info[1].replace(".", ""))
-            else:
-                compute_platforms.append(info[0] + info[1])
+        try:
+            version_map = json.loads(version_result.group(1))
+            for info in version_map["release"].values() :
+                if info[0] == "cpu":
+                    compute_platforms.append("cpu")
+                elif info[0] == "cuda":
+                    compute_platforms.append("cu" + info[1].replace(".", ""))
+                else:
+                    compute_platforms.append(info[0] + info[1])
+        except Exception as err:
+            print("failed to parse platform info")
+            print(err)
+            traceback.print_exc()
         
 def update_human_index():
-    os.makedirs(base_path + "whl/", 0o755, True)
-    with open(base_path + "whl/index.html", "w") as fhandle:
+    os.makedirs(os.path.join(base_path, "whl"), 0o755, True)
+    with open(os.path.join(base_path, "whl" + "index.html"), "w") as fhandle:
         index_html = '''<!DOCTYPE html>
 <html>
   <body>
@@ -229,8 +251,8 @@ Generated by <a href="https://github.com/sonatype-nexus-community/pytorch-pypi">
         fhandle.write(index_html)
     
     for platform in compute_platforms:
-        os.makedirs(base_path + "whl/" + platform + "/", 0o755, True)
-        with open(base_path + "whl/" + platform + "/index.html", "w") as fhandle:
+        os.makedirs(os.path.join(base_path, "whl", platform), 0o755, True)
+        with open(os.path.join(base_path, "whl", platform, "index.html"), "w") as fhandle:
             index_html = f'''<!DOCTYPE html>
 <html>
   <body>
@@ -264,14 +286,16 @@ def export_aria2c():
                     fhandle.write("    checksum=sha-256=" + info["sha256"] + "\n")
 
 def perform_download():
-    truncate(f"{base_path}aria2.log")
-    status = os.system(f"aria2c --check-certificate=false --user-agent=\"{user_agent}\" --log-level=info --file-allocation=falloc --lowest-speed-limit=1K --check-integrity -c -l {base_path}aria2.log -i {pkglist}")
+    log_path = os.path.join(base_path, "aria2.log")
+    truncate(log_path)
+    status = os.system(f"aria2c --check-certificate=false --user-agent=\"{user_agent}\" --log-level=info --file-allocation=falloc --lowest-speed-limit=1K --check-integrity -c -l {log_path} -i {pkglist}")
     if status != 0:
         os._exit(os.waitstatus_to_exitcode(status))
 
 def summary():
-    with open(f"{base_path}summary.txt", "w") as out:
-        for d in sorted(glob(f"{base_path}whl/*/simple")):
+    summary_path = os.path.join(base_path, "summary.txt")
+    with open(summary_path, "w") as out:
+        for d in sorted(glob(os.path.join(base_path, "whl", "*", "simple"))):
             if os.path.isdir(d):
                 count = len(os.listdir(d))
                 out.write(f"{count} {os.path.relpath(d)}\n")
