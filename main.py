@@ -22,17 +22,6 @@ if SHOW_PROGRESS:
         print("tqdm not found")
         SHOW_PROGRESS = False
 
-# USE_SPDLOG = False
-# if "--spdlog" in sys.argv and __name__ == "__main__":
-#     USE_SPDLOG = True
-
-# if USE_SPDLOG:
-#     try:
-#         import spdlog
-#     except:
-#         print("spdlog not found")
-#         USE_SPDLOG = False
-
 base_path = os.getenv("TUNASYNC_WORKING_DIR", default = "./sync_dir/") #同步路径
 if base_path[-1] != "/":
     base_path += "/"
