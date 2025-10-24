@@ -277,7 +277,7 @@ def export_aria2c():
 def perform_download():
     log_path = os.path.join(base_path, "aria2.log")
     truncate(log_path)
-    status = os.system(f"aria2c --check-certificate=false --user-agent=\"{user_agent}\" --log-level=info --file-allocation=falloc --lowest-speed-limit=1K --check-integrity -c -l {log_path} -i {pkglist}")
+    status = os.system(f"aria2c --check-certificate=false --user-agent=\"{user_agent}\" --log-level=info --file-allocation=falloc --lowest-speed-limit=1K --check-integrity -d / -c -l {log_path} -i {pkglist}")
     if status != 0:
         os._exit(os.waitstatus_to_exitcode(status))
 
