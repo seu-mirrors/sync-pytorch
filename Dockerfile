@@ -6,4 +6,6 @@ RUN uv sync
 
 COPY main.py .
 
-CMD ["uv", "run", "main.py"]
+COPY scripts/run.sh .
+
+CMD ["/run.sh"]
