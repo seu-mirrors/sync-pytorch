@@ -1,4 +1,4 @@
-FROM astral/uv:python3.14-alpine
+FROM astral/uv:python3.14-trixie-slim
 
 COPY pyproject.toml uv.lock .
 
