@@ -113,7 +113,7 @@ class update_package_thread(threading.Thread):
                                 split = whl_name.split("#sha256=")
                                 whl_name = split[0]
                                 sha256 = split[1]
-                            assert whl_name.endswith(".whl")
+                            assert whl_name.endswith(".whl") or whl_name.endswith(".tar.gz")
                             self.fetch_list.append({
                                 "name" : whl_name,
                                 "url" : whl_url,
