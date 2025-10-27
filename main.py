@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 import requests
-from urllib.parse import urljoin
+from urllib.parse import unquote, urljoin
 import pickle # todo: 加入签名保证安全性
 import os
 import sys
@@ -103,26 +103,27 @@ class update_package_thread(threading.Thread):
                     search_pos = 0
                     res = re_pattern.search(package_html, search_pos)
                     while res:
-                        whl_name = res.group(2)
+                        whl_name = unquote(res.group(1))
                         if not whl_name in is_whl_processed:
                             with whl_set_lock:
                                 is_whl_processed.add(whl_name)
                             whl_url = urljoin(base_url, res.group(1))
                             sha256 = None
-                            if "#" in whl_url:
-                                split = whl_url.split("#sha256=")
-                                whl_url = split[0]
+                            if "#" in whl_name:
+                                split = whl_name.split("#sha256=")
+                                whl_name = split[0]
                                 sha256 = split[1]
+                            assert whl_name.endswith(".whl")
                             self.fetch_list.append({
                                 "name" : whl_name,
                                 "url" : whl_url,
-                                "local_path" : os.path.join(base_path, "whl", whl_name),
+                                "local_path" : os.path.join(base_path, whl_name),
                                 "sha256" : sha256
                             })
                             self.search_metadata_list.append({
                                 "name" : whl_name + ".metadata",
                                 "url" : whl_url + ".metadata",
-                                "local_path" : os.path.join(base_path, "whl", whl_name + ".metadata"),
+                                "local_path" : os.path.join(base_path, whl_name + ".metadata"),
                             })
                         search_pos = res.span(0)[1]
                         res = re_pattern.search(package_html, search_pos)
