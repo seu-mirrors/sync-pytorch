@@ -22,7 +22,7 @@ if SHOW_PROGRESS:
         print("tqdm not found")
         SHOW_PROGRESS = False
 
-base_path = os.getenv("TUNASYNC_WORKING_DIR", default = "./sync_dir/") #同步路径
+base_path = os.path.abspath(os.getenv("TUNASYNC_WORKING_DIR", default = "./sync_dir/")) #同步路径
 if base_path[-1] != "/":
     base_path += "/"
 base_url = "https://download.pytorch.org/"
