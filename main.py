@@ -130,7 +130,7 @@ class update_package_thread(threading.Thread):
                             })
                             self.search_metadata_list.append({
                                 "name" : whl_name + ".metadata",
-                                "url" : whl_url + ".metadata",
+                                "url" : whl_url.replace(".whl", ".whl.metadata").replace(".tar.gz", ".tar.gz.metadata"),
                                 "local_path" : os.path.join(base_path, whl_name + ".metadata"),
                             })
                         res = next_res
