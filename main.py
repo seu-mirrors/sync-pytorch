@@ -104,6 +104,12 @@ class update_package_thread(threading.Thread):
                     res = re_pattern.search(package_html, search_pos)
                     while res:
                         whl_name = unquote(res.group(1))
+                        if not whl_name.startswith("/"):
+                            # not a wheel, just skip over
+                            print("unknown whl_name: " + whl_name)
+                            continue
+                        # strip leading slash
+                        whl_name = whl_name[1:]
                         if not whl_name in is_whl_processed:
                             with whl_set_lock:
                                 is_whl_processed.add(whl_name)
@@ -113,8 +119,7 @@ class update_package_thread(threading.Thread):
                                 split = whl_name.split("#sha256=")
                                 whl_name = split[0]
                                 sha256 = split[1]
-                            if (whl_name.endswith(".whl") or whl_name.endswith(".tar.gz")) == False:
-                                print(whl_name)
+                            assert whl_name.endswith(".whl") or whl_name.endswith(".tar.gz")
                             self.fetch_list.append({
                                 "name" : whl_name,
                                 "url" : whl_url,
