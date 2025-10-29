@@ -100,13 +100,15 @@ class update_package_thread(threading.Thread):
                     os.makedirs(os.path.join(local_dir, package_info["name"]), 0o755, True)
                     with open(os.path.join(local_dir, package_info["name"], "index.html"), "w") as fhandle:
                         fhandle.write(package_html.replace("href=\"/whl", "href=\"https://mirrors.seu.edu.cn/pytorch/whl"))
-                    search_pos = 0
-                    res = re_pattern.search(package_html, search_pos)
+                    res = re_pattern.search(package_html, 0)
                     while res:
+                        next_pos = res.span(0)[1]
+                        next_res = re_pattern.search(package_html, next_pos)
                         whl_name = unquote(res.group(1))
                         if not whl_name.startswith("/"):
                             # not a wheel, just skip over
                             print("unknown whl_name: " + whl_name)
+                            res = next_res
                             continue
                         # strip leading slash
                         whl_name = whl_name[1:]
@@ -131,8 +133,7 @@ class update_package_thread(threading.Thread):
                                 "url" : whl_url + ".metadata",
                                 "local_path" : os.path.join(base_path, whl_name + ".metadata"),
                             })
-                        search_pos = res.span(0)[1]
-                        res = re_pattern.search(package_html, search_pos)
+                        res = next_res
                 else:
                     print(package_info["name"] + " network error " + str(package_response.status_code))
             except Exception as err:
