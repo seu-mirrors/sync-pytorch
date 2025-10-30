@@ -311,6 +311,9 @@ def summary():
             pickle.dump(current_files, fhandle)
 
 def main():
+    # ensure umask
+    os.umask(0o22)
+
     get_platforms()
     update_human_index()
     load_existed_files()
