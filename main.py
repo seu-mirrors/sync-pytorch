@@ -27,8 +27,8 @@ base_path = os.path.abspath(os.getenv("TUNASYNC_WORKING_DIR", default = "sync_di
 if base_path[-1] != "/":
     base_path += "/"
 base_url = "https://download.pytorch.org/"
-compute_platforms = ["cpu-cxx11-abi", "cpu_pypi_pkg"]
-# ['cpu-cxx11-abi', 'cpu_pypi_pkg', 'cpu', 'cu126', 'cu128', 'cu130', 'rocm6.4']
+# compute_platforms = ["cpu-cxx11-abi", "cpu_pypi_pkg"]
+compute_platforms = ['cpu-cxx11-abi', 'cpu_pypi_pkg', 'cpu', 'cu126', 'cu128', 'cu130', 'rocm6.4']
 threads_count = 16 #线程数量
 user_agent = "Mozilla/5.0 (compatible; sync-pytorch/0.1; +https://github.com/seu-mirrors/sync-pytorch)"
 
@@ -48,8 +48,9 @@ session.headers.update({"User-Agent": user_agent})
 
 truncate = lambda path: open(path, "w").close()
 
+os.makedirs(base_path, 0o755, True)
 logging.basicConfig(
-    level = logging.INFO,
+    level = logging.DEBUG,
     format = '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     datefmt = "%Y-%m-%d %H:%M:%S",
     filename = os.path.join(base_path, 'script.log'),
@@ -117,7 +118,8 @@ def search_package_recursive(url, local_dir):
             # eg.
             # certifi/
             # /whl/certifi-2022.12.7-py3-none-any.whl#sha256=4ad3232f5e926d6718ec31cfc1fcadfde020920e278684144551c91769c7bc18
-            
+            # /whl/cpu/torch-2.8.0%2Bcpu-cp312-cp312-win_arm64.whl#sha256=99fc421a5d234580e45957a7b02effbf3e1c884a5dd077afc85352c77bf41434
+
             # res.group(2) <-> name
             # eg.
             # certifi
@@ -128,7 +130,10 @@ def search_package_recursive(url, local_dir):
             # cu*
             # rocm*
             pattern_str = r'^(cpu|cu|rocm)\S*$'
-            item_url = unquote(res.group(1))
+            # item_url = unquote(res.group(1))
+            html_label = res.group(0)
+            # logging.debug(html_label)
+            item_url = res.group(1)
             item_name = res.group(2)
             if re.match(pattern_str, item_url):
                 res = next_res
@@ -142,26 +147,38 @@ def search_package_recursive(url, local_dir):
                     res = next_res
                     continue
                 is_whl_processed.add(whl_name)
-                whl_url = urljoin(base_url, item_url)
                 sha256 = None
+                whl_url = item_url
                 if "#" in whl_url:
                     split = whl_url.split("#sha256=")
                     whl_url = split[0]
                     sha256 = split[1]
+                whl_local_path = unquote(whl_url)[1:] # whl/certifi-2022.12.7-py3-none-any.whl
+                whl_url = urljoin(base_url, whl_url)
                 assert whl_name.endswith(".whl") or whl_name.endswith(".tar.gz"), f"unexpected extension name (whl_name = ${whl_name})"
                 fetch_list.append({
                     "name" : whl_name,
                     "url" : whl_url,
-                    "local_path" : os.path.join(base_path, whl_name),
+                    "local_path" : os.path.join(base_path, whl_local_path),
                     "sha256" : sha256
                 })
                 logging.debug(f"fetch_info = {fetch_list[-1]}")
-                search_metadata_list.append({
-                    "name" : whl_name + ".metadata",
-                    "url" : whl_url.replace(".whl", ".whl.metadata").replace(".tar.gz", ".tar.gz.metadata"),
-                    "local_path" : os.path.join(base_path, whl_name + ".metadata")
-                })
-                logging.debug(f"search_metadata_info = {search_metadata_list[-1]}")
+                metadata_hash = re.match(r"data-dist-info-metadata=\"sha256=([\S]*)\"", html_label)
+                if metadata_hash:
+                    fetch_list.append({
+                        "name" : whl_name + ".metadata",
+                        "url" : whl_url.replace(".whl", ".whl.metadata").replace(".tar.gz", ".tar.gz.metadata"),
+                        "local_path" : os.path.join(base_path, whl_local_path + ".metadata"),
+                        "sha256" : metadata_hash.group(1)
+                    })
+                    logging.debug(f"fetch_info = {fetch_list[-1]}")
+                else:
+                    search_metadata_list.append({
+                        "name" : whl_name + ".metadata",
+                        "url" : whl_url.replace(".whl", ".whl.metadata").replace(".tar.gz", ".tar.gz.metadata"),
+                        "local_path" : os.path.join(base_path, whl_local_path + ".metadata")
+                    })
+                    logging.debug(f"search_metadata_info = {search_metadata_list[-1]}")
             else:
                 # dir
                 search_package_recursive(urljoin(url, item_url), os.path.join(local_dir, item_url))
@@ -285,7 +302,7 @@ def main():
     # ensure umask
     os.umask(0o22)
 
-    get_platforms()
+    # get_platforms()
     update_human_index()
     load_existed_files()
     logging.info(compute_platforms)
