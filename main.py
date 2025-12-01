@@ -42,8 +42,8 @@ fetch_list_lock = threading.Lock()
 pkglist = os.path.join(base_path, "packagelist.txt")
 
 session = requests.Session()
-session.mount('http://', HTTPAdapter(max_retries=10))
-session.mount('https://', HTTPAdapter(max_retries=10))
+session.mount('http://', HTTPAdapter(max_retries=10, pool_connections = threads_count, pool_maxsize = threads_count))
+session.mount('https://', HTTPAdapter(max_retries=10, pool_connections = threads_count, pool_maxsize = threads_count))
 session.headers.update({"User-Agent": user_agent})
 
 truncate = lambda path: open(path, "w").close()
