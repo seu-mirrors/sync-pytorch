@@ -27,7 +27,7 @@ base_path = os.path.abspath(os.getenv("TUNASYNC_WORKING_DIR", default = "sync_di
 if base_path[-1] != "/":
     base_path += "/"
 base_url = "https://download.pytorch.org/"
-compute_platforms = ['cpu-cxx11-abi']
+compute_platforms = []
 threads_count = 16 #线程数量
 user_agent = "Mozilla/5.0 (compatible; sync-pytorch/0.1; +https://github.com/seu-mirrors/sync-pytorch)"
 
