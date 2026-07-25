@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 import requests
-from urllib.parse import unquote, urljoin
+from urllib.parse import unquote, urljoin, urlparse
 import pickle # todo: 加入签名保证安全性
 import os
 import sys
@@ -152,15 +152,65 @@ def update_index(platform = ""):
         url += platform + "/"
     search_package_recursive(url, local_dir, platform)
 
+def process_whl_entry(item_name, item_url, html_label):
+    whl_name = item_name
+    if whl_name in is_whl_processed:
+        logging.debug(f"skip processed whl_name = {whl_name}")
+        return
+    is_whl_processed.add(whl_name)
+    sha256 = None
+    whl_url = item_url
+    if "#" in whl_url:
+        split = whl_url.split("#sha256=")
+        whl_url = split[0]
+        sha256 = split[1]
+    if item_url.startswith("http://") or item_url.startswith("https://"):
+        # absolute URL (e.g. download-r2.pytorch.org CDN): keep host for fetch,
+        # but derive local path from the URL path so wheels land under whl/<platform>/.
+        parsed = urlparse(whl_url)
+        whl_local_path = unquote(parsed.path)[1:]
+    else:
+        # root-relative URL (e.g. /whl/cpu/...): join with base_url for fetch.
+        whl_local_path = unquote(whl_url)[1:]
+        whl_url = urljoin(base_url, whl_url)
+    # assert whl_name.endswith(".whl") or whl_name.endswith(".tar.gz") or whl_name.endswith(".zip") or whl_name.endswith(".win32.exe"), f"unexpected extension name (whl_name = ${whl_name})"
+    fetch_list.append({
+        "name" : whl_name,
+        "url" : whl_url,
+        "local_path" : os.path.join(base_path, whl_local_path),
+        "sha256" : sha256
+    })
+    logging.debug(f"fetch_info = {fetch_list[-1]}")
+    metadata_hash = re.match(r"data-dist-info-metadata=\"sha256=([\S]*)\"", html_label)
+    if metadata_hash:
+        fetch_list.append({
+            "name" : whl_name + ".metadata",
+            "url" : whl_url.replace(".whl", ".whl.metadata").replace(".tar.gz", ".tar.gz.metadata"),
+            "local_path" : os.path.join(base_path, whl_local_path + ".metadata"),
+            "sha256" : metadata_hash.group(1)
+        })
+        logging.debug(f"fetch_info = {fetch_list[-1]}")
+    else:
+        search_metadata_list.append({
+            "name" : whl_name + ".metadata",
+            "url" : whl_url.replace(".whl", ".whl.metadata").replace(".tar.gz", ".tar.gz.metadata"),
+            "local_path" : os.path.join(base_path, whl_local_path + ".metadata")
+        })
+        logging.debug(f"search_metadata_info = {search_metadata_list[-1]}")
+
 def search_package_recursive(url, local_dir, platform = ""):
     logging.info(f"current url = {url} local_dir = {local_dir}")
     try:
         response = session.get(url)
-        if response.status_code == 200:
-            html_content = response.text
-            os.makedirs(local_dir, 0o755, True)
-            with open(os.path.join(local_dir, "index.html"), "w") as fhandle:
-                fhandle.write(html_content.replace("href=\"/whl", "href=\"https://mirrors.seu.edu.cn/pytorch/whl"))
+        if response.status_code != 200:
+            logging.info(f"skip non-200 url (status={response.status_code}): {url}")
+            return
+        html_content = response.text
+        os.makedirs(local_dir, 0o755, True)
+        with open(os.path.join(local_dir, "index.html"), "w") as fhandle:
+            rewritten = html_content.replace("href=\"/whl", "href=\"https://mirrors.seu.edu.cn/pytorch/whl")
+            rewritten = rewritten.replace("href=\"https://download-r2.pytorch.org/whl", "href=\"https://mirrors.seu.edu.cn/pytorch/whl")
+            fhandle.write(rewritten)
         # 搜索包或者whl
         search_pos = 0
         res = re_pattern.search(html_content, search_pos)
@@ -192,46 +242,9 @@ def search_package_recursive(url, local_dir, platform = ""):
                 res = next_res
                 logging.info(f"skip item_url = {item_url}")
                 continue
-            if item_url.startswith("/"):
-                # whl or archive
-                whl_name = item_name
-                if whl_name in is_whl_processed:
-                    logging.debug(f"skip processed whl_name = {whl_name}")
-                    res = next_res
-                    continue
-                is_whl_processed.add(whl_name)
-                sha256 = None
-                whl_url = item_url
-                if "#" in whl_url:
-                    split = whl_url.split("#sha256=")
-                    whl_url = split[0]
-                    sha256 = split[1]
-                whl_local_path = unquote(whl_url)[1:] # whl/certifi-2022.12.7-py3-none-any.whl
-                whl_url = urljoin(base_url, whl_url)
-                assert whl_name.endswith(".whl") or whl_name.endswith(".tar.gz"), f"unexpected extension name (whl_name = ${whl_name})"
-                fetch_list.append({
-                    "name" : whl_name,
-                    "url" : whl_url,
-                    "local_path" : os.path.join(base_path, whl_local_path),
-                    "sha256" : sha256
-                })
-                logging.debug(f"fetch_info = {fetch_list[-1]}")
-                metadata_hash = re.match(r"data-dist-info-metadata=\"sha256=([\S]*)\"", html_label)
-                if metadata_hash:
-                    fetch_list.append({
-                        "name" : whl_name + ".metadata",
-                        "url" : whl_url.replace(".whl", ".whl.metadata").replace(".tar.gz", ".tar.gz.metadata"),
-                        "local_path" : os.path.join(base_path, whl_local_path + ".metadata"),
-                        "sha256" : metadata_hash.group(1)
-                    })
-                    logging.debug(f"fetch_info = {fetch_list[-1]}")
-                else:
-                    search_metadata_list.append({
-                        "name" : whl_name + ".metadata",
-                        "url" : whl_url.replace(".whl", ".whl.metadata").replace(".tar.gz", ".tar.gz.metadata"),
-                        "local_path" : os.path.join(base_path, whl_local_path + ".metadata")
-                    })
-                    logging.debug(f"search_metadata_info = {search_metadata_list[-1]}")
+            if item_url.startswith("/") or item_url.startswith("http://") or item_url.startswith("https://"):
+                # whl or archive (root-relative /whl/... or absolute https://host/whl/...)
+                process_whl_entry(item_name, item_url, html_label)
             else:
                 # dir
                 if platform == "cpu" and item_name in pypi_replacement_packages:
