@@ -27,6 +27,10 @@ base_path = os.path.abspath(os.getenv("TUNASYNC_WORKING_DIR", default = "sync_di
 if base_path[-1] != "/":
     base_path += "/"
 base_url = "https://download.pytorch.org/"
+pypi_json_url = "https://pypi.org/pypi/"
+# packages that 403 on download.pytorch.org/whl/<platform>/ and must be sourced from PyPI instead
+pypi_replacement_packages = {"xformers"}
+pre_release_pattern = re.compile(r'(?:\.dev\d)|(?:[abrc]\d)')
 compute_platforms = []
 threads_count = 16 #线程数量
 user_agent = "Mozilla/5.0 (compatible; sync-pytorch/0.1; +https://github.com/seu-mirrors/sync-pytorch)"
@@ -88,6 +92,56 @@ def load_existed_files():
         with open(existed_files_info_path, "rb") as fhandle:
             existed_files = pickle.load(fhandle)
 
+def fetch_pypi_package(pkg_name, pkg_local_dir):
+    # download.pytorch.org/whl/cpu/<pkg>/ returns 403 for every wheel, so pull
+    # the package from PyPI instead and serve it under the cpu index.
+    logging.info(f"fetching {pkg_name} from PyPI for cpu index -> {pkg_local_dir}")
+    try:
+        response = session.get(pypi_json_url + pkg_name + "/json")
+        response.raise_for_status()
+        data = response.json()
+    except Exception:
+        logging.exception(f"failed to fetch {pkg_name} from PyPI")
+        logging.error(traceback.format_exc())
+        return
+
+    entries = []
+    for version, files in data.get("releases", {}).items():
+        if pre_release_pattern.search(version):
+            continue
+        for file_info in files:
+            if file_info.get("yanked"):
+                continue
+            if file_info.get("packagetype") not in ("bdist_wheel", "sdist"):
+                continue
+            filename = file_info["filename"]
+            entries.append({
+                "name": filename,
+                "url": file_info["url"],
+                "local_path": os.path.join(pkg_local_dir, filename),
+                "sha256": file_info.get("digests", {}).get("sha256"),
+                "requires_python": file_info.get("requires_python")
+            })
+
+    entries.sort(key=lambda e: e["name"])
+    os.makedirs(pkg_local_dir, 0o755, True)
+    index_lines = []
+    for entry in entries:
+        fetch_list.append(entry)
+        logging.debug(f"fetch_info = {entry}")
+        href = entry["name"]
+        if entry["sha256"]:
+            href += f"#sha256={entry['sha256']}"
+        attrs = ""
+        if entry["requires_python"]:
+            attrs += f' data-requires-python="{entry["requires_python"]}"'
+        index_lines.append(f'    <a href="{href}"{attrs}>{entry["name"]}</a><br/>')
+
+    index_html = '<!DOCTYPE html>\n<html>\n  <head><meta name="pypi:repository-version" content="1.0"></head>\n  <body>\n    <h1>Links for ' + pkg_name + '</h1>\n' + "\n".join(index_lines) + '\n  </body>\n</html>\n'
+    with open(os.path.join(pkg_local_dir, "index.html"), "w") as fhandle:
+        fhandle.write(index_html)
+    logging.info(f"added {len(entries)} {pkg_name} files from PyPI into cpu index")
+
 def update_index(platform = ""):
     logging.info(f"current platform = {platform}")
     os.makedirs(os.path.join(base_path, "whl"), 0o755, True)
@@ -96,9 +150,9 @@ def update_index(platform = ""):
     url = f"{base_url}whl/"
     if platform != "":
         url += platform + "/"
-    search_package_recursive(url, local_dir)
+    search_package_recursive(url, local_dir, platform)
 
-def search_package_recursive(url, local_dir):
+def search_package_recursive(url, local_dir, platform = ""):
     logging.info(f"current url = {url} local_dir = {local_dir}")
     try:
         response = session.get(url)
@@ -180,11 +234,15 @@ def search_package_recursive(url, local_dir):
                     logging.debug(f"search_metadata_info = {search_metadata_list[-1]}")
             else:
                 # dir
-                search_package_recursive(urljoin(url, item_url), os.path.join(local_dir, item_url))
+                if platform == "cpu" and item_name in pypi_replacement_packages:
+                    fetch_pypi_package(item_name, os.path.join(local_dir, item_name))
+                    res = next_res
+                    continue
+                search_package_recursive(urljoin(url, item_url), os.path.join(local_dir, item_url), platform)
             res = next_res
     except Exception as err:
         logging.exception("exception occurred")
-        logging.error(traceback.format_exc(err))
+        logging.error(traceback.format_exc())
         os._exit(1)
 
 def search_metadata():
