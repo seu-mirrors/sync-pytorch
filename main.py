@@ -59,6 +59,13 @@ logging.basicConfig(
     filename = os.path.join(base_path, 'script.log'),
     filemode = "w"
 )
+_console_handler = logging.StreamHandler(sys.stdout)
+_console_handler.setLevel(logging.DEBUG)
+_console_handler.setFormatter(logging.Formatter(
+    '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    datefmt = "%Y-%m-%d %H:%M:%S"
+))
+logging.getLogger().addHandler(_console_handler)
 
 class search_metadata_thread(threading.Thread):
     def __init__(self, thread_index, index_begin, index_end):
