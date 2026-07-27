@@ -172,10 +172,16 @@ def process_whl_entry(item_name, item_url, html_label):
         whl_url = split[0]
         sha256 = split[1]
     if item_url.startswith("http://") or item_url.startswith("https://"):
-        # absolute URL (e.g. download-r2.pytorch.org CDN): keep host for fetch,
-        # but derive local path from the URL path so wheels land under whl/<platform>/.
+        # absolute URL. Local path is always derived from the URL path so wheels
+        # land under whl/<platform>/. For PyTorch CDN hosts (e.g. download-r2.pytorch.org)
+        # we rewrite the fetch host to base_url, because the R2 mirror can lag behind
+        # S3 and ship stale wheels whose sha256 no longer matches the index. URLs from
+        # other hosts (e.g. files.pythonhosted.org for PyPI-fallback packages) are
+        # kept as-is so we don't break packages that have no pytorch.org mirror.
         parsed = urlparse(whl_url)
         whl_local_path = unquote(parsed.path)[1:]
+        if parsed.hostname and parsed.hostname.endswith("pytorch.org"):
+            whl_url = urljoin(base_url, parsed.path)
     else:
         # root-relative URL (e.g. /whl/cpu/...): join with base_url for fetch.
         whl_local_path = unquote(whl_url)[1:]
