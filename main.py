@@ -414,18 +414,26 @@ def parse_aria2_length_mismatch_uris(log_path):
                 last_uri = None
     return uris
 
-def find_local_path_for_uri(uri, pkglist_path):
+def load_pkglist_uri_map(pkglist_path):
+    uri_map = {}
     if not os.path.exists(pkglist_path):
-        return None
+        return uri_map
+    current_uri = None
     with open(pkglist_path, "r") as fhandle:
-        lines = fhandle.read().splitlines()
-    for i, line in enumerate(lines):
-        if line == uri and i + 1 < len(lines) and lines[i + 1].startswith("    out="):
-            return lines[i + 1].split("=", 1)[1]
-    return None
+        for line in fhandle:
+            line = line.rstrip("\n")
+            if not line:
+                continue
+            if line.startswith(" "):
+                value = line.lstrip()
+                if current_uri is not None and value.startswith("out="):
+                    uri_map[current_uri] = value.split("=", 1)[1]
+            else:
+                current_uri = line
+    return uri_map
 
-def cleanup_aria2_partial(uri, pkglist_path):
-    local_path = find_local_path_for_uri(uri, pkglist_path)
+def cleanup_aria2_partial(uri, uri_map):
+    local_path = uri_map.get(uri)
     if not local_path:
         logging.warning(f"could not resolve local path for length-mismatch URI: {uri}")
         return False
@@ -442,6 +450,7 @@ def cleanup_aria2_partial(uri, pkglist_path):
 
 def perform_download():
     log_path = os.path.join(base_path, "aria2.log")
+    uri_map = load_pkglist_uri_map(pkglist)
     max_attempts = 5
     for attempt in range(1, max_attempts + 1):
         truncate(log_path)
@@ -458,7 +467,7 @@ def perform_download():
         mismatch_uris = parse_aria2_length_mismatch_uris(log_path)
         if mismatch_uris:
             for uri in mismatch_uris:
-                cleanup_aria2_partial(uri, pkglist)
+                cleanup_aria2_partial(uri, uri_map)
             logging.warning(
                 f"aria2c attempt {attempt} failed ({len(mismatch_uris)} "
                 f"length-mismatch); removed stale partials; retrying"
