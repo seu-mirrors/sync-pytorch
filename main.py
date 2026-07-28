@@ -397,11 +397,77 @@ def export_aria2c():
                 if "sha256" in info and info["sha256"]:
                     fhandle.write("    checksum=sha-256=" + info["sha256"] + "\n")
 
+def parse_aria2_length_mismatch_uris(log_path):
+    uris = []
+    last_uri = None
+    if not os.path.exists(log_path):
+        return uris
+    with open(log_path, "r", errors="replace") as fhandle:
+        for line in fhandle:
+            m = re.search(r"errorCode=1 URI=(\S+)", line)
+            if m:
+                last_uri = m.group(1)
+                continue
+            if "total length mismatch" in line and last_uri:
+                if last_uri not in uris:
+                    uris.append(last_uri)
+                last_uri = None
+    return uris
+
+def find_local_path_for_uri(uri, pkglist_path):
+    if not os.path.exists(pkglist_path):
+        return None
+    with open(pkglist_path, "r") as fhandle:
+        lines = fhandle.read().splitlines()
+    for i, line in enumerate(lines):
+        if line == uri and i + 1 < len(lines) and lines[i + 1].startswith("    out="):
+            return lines[i + 1].split("=", 1)[1]
+    return None
+
+def cleanup_aria2_partial(uri, pkglist_path):
+    local_path = find_local_path_for_uri(uri, pkglist_path)
+    if not local_path:
+        logging.warning(f"could not resolve local path for length-mismatch URI: {uri}")
+        return False
+    removed = False
+    for p in (local_path, local_path + ".aria2"):
+        if os.path.exists(p):
+            try:
+                os.remove(p)
+                logging.info(f"removed stale partial file: {p}")
+                removed = True
+            except OSError as err:
+                logging.warning(f"failed to remove {p}: {err}")
+    return removed
+
 def perform_download():
     log_path = os.path.join(base_path, "aria2.log")
-    truncate(log_path)
-    status = os.system(f"aria2c --check-certificate=false --user-agent=\"{user_agent}\" --log-level=info --file-allocation=falloc --lowest-speed-limit=1K --check-integrity -d / -c -l {log_path} -i {pkglist}")
-    if status != 0:
+    max_attempts = 5
+    for attempt in range(1, max_attempts + 1):
+        truncate(log_path)
+        cmd = (
+            f"aria2c --check-certificate=false --user-agent=\"{user_agent}\" "
+            f"--log-level=info --file-allocation=falloc --lowest-speed-limit=1K "
+            f"--check-integrity --max-tries=10 --retry-wait=3 "
+            f"-d / -c -l {log_path} -i {pkglist}"
+        )
+        logging.info(f"aria2c attempt {attempt}/{max_attempts}")
+        status = os.system(cmd)
+        if status == 0:
+            return
+        mismatch_uris = parse_aria2_length_mismatch_uris(log_path)
+        if mismatch_uris:
+            for uri in mismatch_uris:
+                cleanup_aria2_partial(uri, pkglist)
+            logging.warning(
+                f"aria2c attempt {attempt} failed ({len(mismatch_uris)} "
+                f"length-mismatch); removed stale partials; retrying"
+            )
+            continue
+        if attempt < max_attempts:
+            logging.warning(f"aria2c attempt {attempt} failed (status={status}); retrying")
+            continue
+        logging.error(f"aria2c failed after {max_attempts} attempts")
         os._exit(os.waitstatus_to_exitcode(status))
 
 def summary():
