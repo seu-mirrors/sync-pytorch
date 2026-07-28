@@ -35,8 +35,8 @@ compute_platforms = []
 threads_count = 16 #线程数量
 user_agent = "Mozilla/5.0 (compatible; sync-pytorch/0.1; +https://github.com/seu-mirrors/sync-pytorch)"
 
-existed_files = {} # name : path
-current_files = {} # name : path
+existed_files = set() # set of local_path downloaded last run
+current_files = set() # set of local_path seen this run
 is_whl_processed = set()
 re_pattern = re.compile(r"<a href=\"(\S*)\".*>(\S*)</a>")
 fetch_list = []
@@ -97,7 +97,14 @@ def load_existed_files():
     existed_files_info_path = os.path.join(base_path, "existed_files.bin")
     if os.path.exists(existed_files_info_path) and os.path.isfile(existed_files_info_path):
         with open(existed_files_info_path, "rb") as fhandle:
-            existed_files = pickle.load(fhandle)
+            loaded = pickle.load(fhandle)
+        # migrate legacy name->path dict to a set of local paths so a file that
+        # lives under multiple platform directories (e.g. filelock under whl/cpu
+        # and whl/cu124) is tracked independently for each location.
+        if isinstance(loaded, dict):
+            existed_files = set(loaded.values())
+        else:
+            existed_files = set(loaded)
 
 def fetch_pypi_package(pkg_name, pkg_local_dir):
     # download.pytorch.org/whl/cpu/<pkg>/ returns 403 for every wheel, so pull
@@ -159,12 +166,8 @@ def update_index(platform = ""):
         url += platform + "/"
     search_package_recursive(url, local_dir, platform)
 
-def process_whl_entry(item_name, item_url, html_label):
+def process_whl_entry(item_name, item_url, html_label, platform=""):
     whl_name = item_name
-    if whl_name in is_whl_processed:
-        logging.debug(f"skip processed whl_name = {whl_name}")
-        return
-    is_whl_processed.add(whl_name)
     sha256 = None
     whl_url = item_url
     if "#" in whl_url:
@@ -172,20 +175,33 @@ def process_whl_entry(item_name, item_url, html_label):
         whl_url = split[0]
         sha256 = split[1]
     if item_url.startswith("http://") or item_url.startswith("https://"):
-        # absolute URL. Local path is always derived from the URL path so wheels
-        # land under whl/<platform>/. For PyTorch CDN hosts (e.g. download-r2.pytorch.org)
-        # we rewrite the fetch host to base_url, because the R2 mirror can lag behind
-        # S3 and ship stale wheels whose sha256 no longer matches the index. URLs from
+        # absolute URL. Local path is derived from the URL path so wheels land under
+        # whl/<platform>/. For PyTorch CDN hosts (e.g. download-r2.pytorch.org) we
+        # rewrite the fetch host to base_url, because the R2 mirror can lag behind S3
+        # and ship stale wheels whose sha256 no longer matches the index. URLs from
         # other hosts (e.g. files.pythonhosted.org for PyPI-fallback packages) are
-        # kept as-is so we don't break packages that have no pytorch.org mirror.
+        # kept as-is for fetching, but the local path is flattened to
+        # whl/<platform>/<filename> so the on-disk layout matches the rest of the
+        # index and the rewritten href in index.html resolves on the local mirror.
         parsed = urlparse(whl_url)
-        whl_local_path = unquote(parsed.path)[1:]
         if parsed.hostname and parsed.hostname.endswith("pytorch.org"):
             whl_url = urljoin(base_url, parsed.path)
+            whl_local_path = unquote(parsed.path)[1:]
+        elif platform:
+            whl_local_path = f"whl/{platform}/{unquote(os.path.basename(parsed.path))}"
+        else:
+            whl_local_path = unquote(parsed.path)[1:]
     else:
         # root-relative URL (e.g. /whl/cpu/...): join with base_url for fetch.
         whl_local_path = unquote(whl_url)[1:]
         whl_url = urljoin(base_url, whl_url)
+    # dedupe by local_path so the same wheel referenced from multiple platform
+    # indexes still lands under each platform's directory instead of being skipped
+    # after the first encounter (e.g. filelock is referenced by both cpu and cu124).
+    if whl_local_path in is_whl_processed:
+        logging.debug(f"skip processed whl_local_path = {whl_local_path}")
+        return
+    is_whl_processed.add(whl_local_path)
     # assert whl_name.endswith(".whl") or whl_name.endswith(".tar.gz") or whl_name.endswith(".zip") or whl_name.endswith(".win32.exe"), f"unexpected extension name (whl_name = ${whl_name})"
     fetch_list.append({
         "name" : whl_name,
@@ -223,6 +239,15 @@ def search_package_recursive(url, local_dir, platform = ""):
         with open(os.path.join(local_dir, "index.html"), "w") as fhandle:
             rewritten = html_content.replace("href=\"/whl", "href=\"https://mirrors.seu.edu.cn/pytorch/whl")
             rewritten = rewritten.replace("href=\"https://download-r2.pytorch.org/whl", "href=\"https://mirrors.seu.edu.cn/pytorch/whl")
+            if platform:
+                # rewrite PyPI-fallback hrefs (e.g. files.pythonhosted.org) to the
+                # local mirror so pip resolves them under whl/<platform>/<filename>, which
+                # matches the local_path computed in process_whl_entry for those URLs.
+                rewritten = re.sub(
+                    r'href="https://files\.pythonhosted\.org/packages/[^"]*/([^"#]+)(#[^"]*)?"',
+                    lambda m: f'href="https://mirrors.seu.edu.cn/pytorch/whl/{platform}/{m.group(1)}{m.group(2) or ""}"',
+                    rewritten
+                )
             fhandle.write(rewritten)
         # 搜索包或者whl
         search_pos = 0
@@ -257,7 +282,7 @@ def search_package_recursive(url, local_dir, platform = ""):
                 continue
             if item_url.startswith("/") or item_url.startswith("http://") or item_url.startswith("https://"):
                 # whl or archive (root-relative /whl/... or absolute https://host/whl/...)
-                process_whl_entry(item_name, item_url, html_label)
+                process_whl_entry(item_name, item_url, html_label, platform)
             else:
                 # dir
                 if platform == "cpu" and item_name in pypi_replacement_packages:
@@ -335,20 +360,39 @@ see also <a href="..">other available indexes</a>
             fhandle.write(index_html)
 
 def remove_outdated_files():
-    outdated_files = []
+    current_files.clear()
     for info in fetch_list:
-        current_files[info["name"]] = info["local_path"]
-    for existed_file_name, existed_file_path in existed_files.items():
-        if not existed_file_name in current_files:
-            outdated_files.append(existed_file_path)
+        current_files.add(info["local_path"])
+    # tracked by local_path, so a file whose location changed between runs (e.g.
+    # after a layout migration, or the same filename now served under a different
+    # platform directory) is no longer in current_files: the stale copy at the old
+    # path is pruned here, and export_aria2c requeues the new path for download.
+    outdated_files = existed_files - current_files
     for path in outdated_files:
         os.remove(path)
         logging.info(f"remove file: {path}")
 
+def remove_empty_dirs():
+    # walk bottom-up so deleting a leaf dir lets its parent become empty and be
+    # removed in the same pass. os.walk caches the dirs list at scandir time, so
+    # re-check with os.listdir after children may have been deleted this pass.
+    removed = 0
+    for root, dirs, files in os.walk(base_path, topdown=False):
+        if os.path.abspath(root) == os.path.abspath(base_path):
+            continue
+        if not os.listdir(root):
+            try:
+                os.rmdir(root)
+                removed += 1
+                logging.info(f"remove empty dir: {root}")
+            except OSError:
+                pass
+    logging.info(f"removed {removed} empty directories")
+
 def export_aria2c():
     with open(pkglist, "w") as fhandle:
         for info in fetch_list:
-            if not info["name"] in existed_files:
+            if info["local_path"] not in existed_files:
                 fhandle.write(info["url"] + "\n" + "    out=" + info["local_path"] + "\n")
                 if "sha256" in info and info["sha256"]:
                     fhandle.write("    checksum=sha-256=" + info["sha256"] + "\n")
@@ -393,6 +437,7 @@ def main():
         update_index(platform)
     search_metadata()
     remove_outdated_files()
+    remove_empty_dirs()
     export_aria2c()
     perform_download()
     summary()
