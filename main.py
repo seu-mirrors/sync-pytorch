@@ -570,6 +570,54 @@ def update_human_index():
         with open(os.path.join(base_path, "whl", platform, "index.html"), "w", encoding = "utf-8") as fhandle:
             fhandle.write(platform_html)
 
+def dedupe_shared_files():
+    # 同一内容（同名 + 同 sha256）的文件被多个平台索引引用时，只保留一份
+    # 在 whl/<filename>，所有 fetch 条目统一指向它，避免跨平台重复下载。
+    by_name = {}
+    for info in fetch_list:
+        name = os.path.basename(info["local_path"])
+        sha = info.get("sha256") or "?"
+        by_name.setdefault(name, {}).setdefault(sha, []).append(info)
+
+    deduped_shas = set()
+    for name, sha_groups in by_name.items():
+        entries = [info for group in sha_groups.values() for info in group]
+        if len(entries) < 2 or len(sha_groups) != 1:
+            continue
+        canonical = os.path.join(base_path, "whl", name)
+        for info in entries:
+            if info["local_path"] != canonical:
+                info["local_path"] = canonical
+                if info.get("sha256"):
+                    deduped_shas.add(info["sha256"])
+    if deduped_shas:
+        logging.info(f"deduplicated {len(deduped_shas)} files referenced by multiple platforms -> whl/<filename>")
+    return deduped_shas
+
+_whl_href_pattern = re.compile(
+    r'href="(?:https://mirrors\.seu\.edu\.cn/pytorch|https://download(?:-r2)?\.pytorch\.org)/whl/'
+    r'([^"#/]+)/([^"#/]+\.(?:whl|tar\.gz|zip))(#sha256=[0-9a-f]{64})?"'
+)
+
+def rewrite_shared_hrefs(deduped_shas):
+    if not deduped_shas:
+        return
+    rewritten = 0
+    for idx_path in glob(os.path.join(base_path, "whl", "**", "index.html"), recursive=True):
+        with open(idx_path, "r") as fhandle:
+            text = fhandle.read()
+        def repl(match):
+            filename, fragment = match.group(2), match.group(3)
+            if fragment and fragment[len("#sha256="):] in deduped_shas:
+                return f'href="https://mirrors.seu.edu.cn/pytorch/whl/{filename}{fragment}"'
+            return match.group(0)
+        new_text = _whl_href_pattern.sub(repl, text)
+        if new_text != text:
+            with open(idx_path, "w") as fhandle:
+                fhandle.write(new_text)
+            rewritten += 1
+    logging.info(f"rewrote shared-file hrefs in {rewritten} index files")
+
 def remove_outdated_files():
     current_files.clear()
     for info in fetch_list:
@@ -601,12 +649,17 @@ def remove_empty_dirs():
     logging.info(f"removed {removed} empty directories")
 
 def export_aria2c():
+    seen_local_paths = set()
     with open(pkglist, "w") as fhandle:
         for info in fetch_list:
-            if info["local_path"] not in existed_files:
-                fhandle.write(info["url"] + "\n" + "    out=" + info["local_path"] + "\n")
-                if "sha256" in info and info["sha256"]:
-                    fhandle.write("    checksum=sha-256=" + info["sha256"] + "\n")
+            # dedupe_shared_files 会把多平台重复的文件统一指向 whl/<filename>，
+            # 这里按 local_path 去重，同一份内容只写一条 aria2 任务。
+            if info["local_path"] in existed_files or info["local_path"] in seen_local_paths:
+                continue
+            seen_local_paths.add(info["local_path"])
+            fhandle.write(info["url"] + "\n" + "    out=" + info["local_path"] + "\n")
+            if "sha256" in info and info["sha256"]:
+                fhandle.write("    checksum=sha-256=" + info["sha256"] + "\n")
 
 def parse_aria2_length_mismatch_uris(log_path):
     uris = []
@@ -722,6 +775,8 @@ def main():
     for platform in compute_platforms:
         update_index(platform)
     search_metadata()
+    deduped_shas = dedupe_shared_files()
+    rewrite_shared_hrefs(deduped_shas)
     remove_outdated_files()
     remove_empty_dirs()
     export_aria2c()
