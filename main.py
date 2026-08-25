@@ -92,19 +92,44 @@ class search_metadata_thread(threading.Thread):
         with fetch_list_lock:
             fetch_list.extend(self.fetch_list)
 
+def scan_existing_files():
+    # 没有 existed_files.bin 时回退：扫描 whl/ 下除 index.html 外的所有文件，
+    # 这样即使没有上一次运行记录，也能清理索引中不再引用的冗余文件。
+    existing = set()
+    whl_dir = os.path.join(base_path, "whl")
+    if not os.path.isdir(whl_dir):
+        return existing
+    for root, _dirs, files in os.walk(whl_dir):
+        for name in files:
+            if name == "index.html":
+                continue
+            existing.add(os.path.normpath(os.path.join(root, name)))
+    return existing
+
 def load_existed_files():
     global existed_files
     existed_files_info_path = os.path.join(base_path, "existed_files.bin")
+    loaded = None
     if os.path.exists(existed_files_info_path) and os.path.isfile(existed_files_info_path):
-        with open(existed_files_info_path, "rb") as fhandle:
-            loaded = pickle.load(fhandle)
-        # migrate legacy name->path dict to a set of local paths so a file that
-        # lives under multiple platform directories (e.g. filelock under whl/cpu
-        # and whl/cu124) is tracked independently for each location.
-        if isinstance(loaded, dict):
-            existed_files = set(loaded.values())
-        else:
-            existed_files = set(loaded)
+        try:
+            with open(existed_files_info_path, "rb") as fhandle:
+                loaded = pickle.load(fhandle)
+        except Exception:
+            logging.warning("failed to load existed_files.bin, falling back to filesystem scan")
+    if loaded is None:
+        existed_files = scan_existing_files()
+        logging.info(f"no usable existed_files.bin; tracking {len(existed_files)} existing files from filesystem")
+        return
+    # 路径统一 normpath，避免 base_path 以 "/" 结尾时 os.path.join 产生的
+    # 混合分隔符（Windows 上 \ 与 / 混用）导致与 filesystem 扫描路径不匹配。
+    normalize = lambda p: os.path.normpath(p)
+    # migrate legacy name->path dict to a set of local paths so a file that
+    # lives under multiple platform directories (e.g. filelock under whl/cpu
+    # and whl/cu124) is tracked independently for each location.
+    if isinstance(loaded, dict):
+        existed_files = {normalize(p) for p in loaded.values()}
+    else:
+        existed_files = {normalize(p) for p in loaded}
 
 def fetch_pypi_package(pkg_name, pkg_local_dir):
     # download.pytorch.org/whl/cpu/<pkg>/ returns 403 for every wheel, so pull
@@ -621,15 +646,18 @@ def rewrite_shared_hrefs(deduped_shas):
 def remove_outdated_files():
     current_files.clear()
     for info in fetch_list:
-        current_files.add(info["local_path"])
+        current_files.add(os.path.normpath(info["local_path"]))
     # tracked by local_path, so a file whose location changed between runs (e.g.
     # after a layout migration, or the same filename now served under a different
     # platform directory) is no longer in current_files: the stale copy at the old
     # path is pruned here, and export_aria2c requeues the new path for download.
     outdated_files = existed_files - current_files
     for path in outdated_files:
-        os.remove(path)
-        logging.info(f"remove file: {path}")
+        try:
+            os.remove(path)
+            logging.info(f"remove file: {path}")
+        except OSError as err:
+            logging.warning(f"failed to remove {path}: {err}")
 
 def remove_empty_dirs():
     # walk bottom-up so deleting a leaf dir lets its parent become empty and be
@@ -654,10 +682,11 @@ def export_aria2c():
         for info in fetch_list:
             # dedupe_shared_files 会把多平台重复的文件统一指向 whl/<filename>，
             # 这里按 local_path 去重，同一份内容只写一条 aria2 任务。
-            if info["local_path"] in existed_files or info["local_path"] in seen_local_paths:
+            local_path = os.path.normpath(info["local_path"])
+            if local_path in existed_files or local_path in seen_local_paths:
                 continue
-            seen_local_paths.add(info["local_path"])
-            fhandle.write(info["url"] + "\n" + "    out=" + info["local_path"] + "\n")
+            seen_local_paths.add(local_path)
+            fhandle.write(info["url"] + "\n" + "    out=" + local_path + "\n")
             if "sha256" in info and info["sha256"]:
                 fhandle.write("    checksum=sha-256=" + info["sha256"] + "\n")
 
@@ -757,12 +786,13 @@ def summary():
             out.write(f"{lines} {os.path.relpath(pkglist)}\n")
     
     files_info_path = os.path.join(base_path, "existed_files.bin")
+    # 没有历史文件时也要写入，否则后续运行无法跟踪上一轮状态、无法清理冗余文件
+    if os.path.exists(files_info_path + ".old"):
+        os.remove(files_info_path + ".old")
     if os.path.exists(files_info_path):
-        if os.path.exists(files_info_path + ".old"):
-            os.remove(files_info_path + ".old")
         os.rename(files_info_path, files_info_path + ".old")
-        with open(files_info_path, "wb") as fhandle:
-            pickle.dump(current_files, fhandle)
+    with open(files_info_path, "wb") as fhandle:
+        pickle.dump(current_files, fhandle)
 
 def main():
     # ensure umask
