@@ -66,6 +66,9 @@ _console_handler.setFormatter(logging.Formatter(
     datefmt = "%Y-%m-%d %H:%M:%S"
 ))
 logging.getLogger().addHandler(_console_handler)
+# requests 底层 urllib3 的 DEBUG/INFO 噪音（连接、HTTP 状态等）不写入输出
+logging.getLogger("urllib3").setLevel(logging.WARNING)
+logging.getLogger("requests").setLevel(logging.WARNING)
 
 class search_metadata_thread(threading.Thread):
     def __init__(self, thread_index, index_begin, index_end):
