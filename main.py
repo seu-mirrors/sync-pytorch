@@ -294,11 +294,8 @@ def search_package_recursive(url, local_dir, platform = ""):
             # certifi
             # certifi-2022.12.7-py3-none-any.whl
 
-            # 过滤url
-            # cpu*
-            # cu*
-            # rocm*
-            pattern_str = r'^(cpu|cu|rocm)\S*$'
+            # 过滤url: 平台目录链接 (cpu/ cu126/ rocm7.2/ 等)
+            pattern_str = r'^(cpu|cu\d+|rocm[\d.]+)/?$'
             # item_url = unquote(res.group(1))
             html_label = res.group(0)
             # logging.debug(html_label)
