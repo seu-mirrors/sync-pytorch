@@ -503,7 +503,7 @@ __CSS__
   <h2>配置镜像站</h2>
 
   <h3>① pip</h3>
-  <pre><code id="cmd-pip">pip install torch torchvision torchaudio --index-url """ + SEU_MIRROR_URL + """/__PLATFORM__/simple</code></pre>
+  <pre><code id="cmd-pip">pip install torch torchvision --index-url """ + SEU_MIRROR_URL + """/__PLATFORM__/simple</code></pre>
   <button type="button" class="copy-btn" onclick="copyCmd('cmd-pip', this)">复制命令</button>
 
   <h3>② uv</h3>
@@ -511,21 +511,21 @@ __CSS__
   <pre><code id="cmd-uv-toml">__UV_TOML_SNIPPET__</code></pre>
   <button type="button" class="copy-btn" onclick="copyCmd('cmd-uv-toml', this)">复制配置</button>
   <p>之后执行以下命令</p>
-  <pre><code id="cmd-uv-add">uv add torch torchvision torchaudio</code></pre>
+  <pre><code id="cmd-uv-add">uv add torch torchvision</code></pre>
   <button type="button" class="copy-btn" onclick="copyCmd('cmd-uv-add', this)">复制命令</button>
   <p>即可从本镜像安装 PyTorch。更多 uv 与 PyTorch 集成方式见官方《<a href="https://docs.astral.sh/uv/guides/integration/pytorch/">Using uv with PyTorch</a>》（按 <code>sys_platform</code> 选择不同 backend、用 optional-dependencies 切换等）。把指南中的 <code>https://download.pytorch.org/whl/__PLATFORM__</code> 替换为 <code>""" + SEU_MIRROR_URL + """/__PLATFORM__/simple</code> 即指向本镜像。</p>
   <p>备选（<strong>不会写入项目配置文件</strong>，删除 <code>.venv</code> 后不会自动重新下载，仅适合临时一次性安装）：将 <code>pip</code> 命令替换为 <code>uv pip</code> 直接安装：</p>
-  <pre><code id="cmd-uv-pip">uv pip install torch torchvision torchaudio --index-url """ + SEU_MIRROR_URL + """/__PLATFORM__/simple</code></pre>
+  <pre><code id="cmd-uv-pip">uv pip install torch torchvision --index-url """ + SEU_MIRROR_URL + """/__PLATFORM__/simple</code></pre>
   <button type="button" class="copy-btn" onclick="copyCmd('cmd-uv-pip', this)">复制命令</button>
 
   <h3>③ conda</h3>
   <p>conda 本身不消费 PyPI 风格索引，但可在 conda 环境中通过 pip 使用本镜像安装 PyTorch，请将 <code>base</code> 替换为需要安装 <code>PyTorch</code> 的环境：</p>
-  <pre><code id="cmd-conda">conda run -n base pip install torch torchvision torchaudio --index-url """ + SEU_MIRROR_URL + """/__PLATFORM__/simple</code></pre>
+  <pre><code id="cmd-conda">conda run -n base pip install torch torchvision --index-url """ + SEU_MIRROR_URL + """/__PLATFORM__/simple</code></pre>
   <button type="button" class="copy-btn" onclick="copyCmd('cmd-conda', this)">复制命令</button>
 
   <h3>④ mamba</h3>
   <p><a href="https://mamba.readthedocs.io/">mamba</a> 是 conda 的高性能替代品。在 mamba 环境中通过 pip 使用本镜像安装 PyTorch，请将 <code>base</code> 替换为需要安装 <code>PyTorch</code> 的环境：</p>
-  <pre><code id="cmd-mamba">mamba run -n base pip install torch torchvision torchaudio --index-url """ + SEU_MIRROR_URL + """/__PLATFORM__/simple</code></pre>
+  <pre><code id="cmd-mamba">mamba run -n base pip install torch torchvision --index-url """ + SEU_MIRROR_URL + """/__PLATFORM__/simple</code></pre>
   <button type="button" class="copy-btn" onclick="copyCmd('cmd-mamba', this)">复制命令</button>
 
   <p>查看其它计算平台的索引请回到 <a href="..">索引总览</a>。</p>
@@ -554,7 +554,7 @@ def build_uv_sources_snippet(platform):
     else:
         marker = None
 
-    pkgs = ["torch", "torchvision", "torchaudio"]
+    pkgs = ["torch", "torchvision"]
     lines = ["[tool.uv.sources]"]
     for pkg in pkgs:
         if marker:
