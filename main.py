@@ -34,6 +34,7 @@ pre_release_pattern = re.compile(r'(?:\.dev\d)|(?:[abrc]\d)')
 compute_platforms = []
 threads_count = 16 #线程数量
 user_agent = "Mozilla/5.0 (compatible; sync-pytorch/0.1; +https://github.com/seu-mirrors/sync-pytorch)"
+request_timeout = (10, 30) # (connect, read) 秒，避免 requests 默认无限等待
 
 existed_files = set() # set of local_path downloaded last run
 current_files = set() # set of local_path seen this run
@@ -42,12 +43,18 @@ re_pattern = re.compile(r"<a href=\"(\S*)\".*>(\S*)</a>")
 fetch_list = []
 search_metadata_list = []
 fetch_list_lock = threading.Lock()
+metadata_progress_lock = threading.Lock()
+metadata_checked = 0
 pkglist = os.path.join(base_path, "packagelist.txt")
 
-session = requests.Session()
-session.mount('http://', HTTPAdapter(max_retries=10, pool_connections = threads_count, pool_maxsize = threads_count))
-session.mount('https://', HTTPAdapter(max_retries=10, pool_connections = threads_count, pool_maxsize = threads_count))
-session.headers.update({"User-Agent": user_agent})
+def build_session():
+    new_session = requests.Session()
+    new_session.mount('http://', HTTPAdapter(max_retries=10, pool_connections = threads_count, pool_maxsize = threads_count))
+    new_session.mount('https://', HTTPAdapter(max_retries=10, pool_connections = threads_count, pool_maxsize = threads_count))
+    new_session.headers.update({"User-Agent": user_agent})
+    return new_session
+
+session = build_session()
 
 truncate = lambda path: open(path, "w").close()
 
@@ -78,6 +85,9 @@ class search_metadata_thread(threading.Thread):
         self.index_end = index_end
         self.fetch_list = []
     def run(self):
+        global metadata_checked
+        thread_session = build_session()
+        total = len(search_metadata_list)
         rng = None
         if SHOW_PROGRESS:
             rng = tqdm(range(self.index_begin, self.index_end), desc = f"thread #{self.thread_index}", leave = False)
@@ -85,12 +95,16 @@ class search_metadata_thread(threading.Thread):
             rng = range(self.index_begin, self.index_end)
         for i in rng:
             try:
-                if session.head(search_metadata_list[i]["url"]).status_code == 200:
+                if thread_session.head(search_metadata_list[i]["url"], timeout = request_timeout).status_code == 200:
                     self.fetch_list.append(search_metadata_list[i])
             except Exception as err:
-                logging.exception("network error")
-                logging.error(traceback.format_exc())
-                os._exit(1)
+                logging.warning(f"metadata check failed for {search_metadata_list[i]['url']}: {err}")
+                logging.debug(traceback.format_exc())
+            with metadata_progress_lock:
+                metadata_checked += 1
+                checked = metadata_checked
+            if checked % 500 == 0 or checked == total:
+                logging.info(f"metadata check progress: {checked}/{total}")
 
         with fetch_list_lock:
             fetch_list.extend(self.fetch_list)
@@ -139,7 +153,7 @@ def fetch_pypi_package(pkg_name, pkg_local_dir):
     # the package from PyPI instead and serve it under the cpu index.
     logging.info(f"fetching {pkg_name} from PyPI for cpu index -> {pkg_local_dir}")
     try:
-        response = session.get(pypi_json_url + pkg_name + "/json")
+        response = session.get(pypi_json_url + pkg_name + "/json", timeout = request_timeout)
         response.raise_for_status()
         data = response.json()
     except Exception:
@@ -258,7 +272,7 @@ def process_whl_entry(item_name, item_url, html_label, platform=""):
 def search_package_recursive(url, local_dir, platform = ""):
     logging.info(f"current url = {url} local_dir = {local_dir}")
     try:
-        response = session.get(url)
+        response = session.get(url, timeout = request_timeout)
         if response.status_code != 200:
             logging.info(f"skip non-200 url (status={response.status_code}): {url}")
             return
@@ -330,9 +344,10 @@ def search_metadata():
         thread.start()
     for t in threads:
         t.join()
+    logging.info(f"metadata search finished: checked {len(search_metadata_list)} urls")
 
 def get_platforms():
-    response = session.get("https://raw.githubusercontent.com/pytorch/pytorch.github.io/refs/heads/site/assets/quick-start-module.js")
+    response = session.get("https://raw.githubusercontent.com/pytorch/pytorch.github.io/refs/heads/site/assets/quick-start-module.js", timeout = request_timeout)
     version_result = re.search("version_map=({.*})", response.text)
     if version_result:
         try:
