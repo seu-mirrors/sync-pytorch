@@ -584,7 +584,8 @@ def build_uv_sources_snippet(platform):
     lines.append("[[tool.uv.index]]")
     lines.append(f'name = "{index_name}"')
     lines.append(f'url = "{SEU_MIRROR_URL}/{platform}/simple"')
-    lines.append("explicit = true")
+    if not platform.startswith("rocm"):
+        lines.append("explicit = true")
     return "\n".join(lines)
 
 
