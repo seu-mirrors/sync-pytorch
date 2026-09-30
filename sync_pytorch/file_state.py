@@ -14,15 +14,15 @@ def scan_existing_files():
     whl_dir = os.path.join(BASE_PATH, "whl")
     if not os.path.isdir(whl_dir):
         return existing
-    for root, _dirs, files in os.walk(whl_dir):
-        for name in files:
+    for root, _dirs, filenames in os.walk(whl_dir):
+        for name in filenames:
             if name == "index.html":
                 continue
             existing.add(os.path.normpath(os.path.join(root, name)))
     return existing
 
 
-def load_existed_files():
+def load_previous_run_files():
     loaded = None
     if os.path.exists(EXISTED_FILES_PATH) and os.path.isfile(EXISTED_FILES_PATH):
         try:
@@ -46,16 +46,16 @@ def load_existed_files():
         state.previous_run_files = {normalize(p) for p in loaded}
 
 
-def remove_outdated_files():
+def prune_stale_files():
     state.current_run_files.clear()
-    for info in state.download_queue:
-        state.current_run_files.add(os.path.normpath(info["local_path"]))
+    for entry in state.download_queue:
+        state.current_run_files.add(os.path.normpath(entry["local_path"]))
     # tracked by local_path, so a file whose location changed between runs (e.g.
     # after a layout migration, or the same filename now served under a different
     # platform directory) is no longer in state.current_run_files: the stale copy at
-    # the old path is pruned here, and export_aria2c requeues the new path for download.
-    outdated_files = state.previous_run_files - state.current_run_files
-    for path in outdated_files:
+    # the old path is pruned here, and write_aria2_input requeues the new path for download.
+    stale_files = state.previous_run_files - state.current_run_files
+    for path in stale_files:
         try:
             os.remove(path)
             logging.info(f"remove file: {path}")
@@ -63,12 +63,12 @@ def remove_outdated_files():
             logging.warning(f"failed to remove {path}: {err}")
 
 
-def remove_empty_dirs():
+def prune_empty_dirs():
     # walk bottom-up so deleting a leaf dir lets its parent become empty and be
     # removed in the same pass. os.walk caches the dirs list at scandir time, so
     # re-check with os.listdir after children may have been deleted this pass.
     removed = 0
-    for root, dirs, files in os.walk(BASE_PATH, topdown=False):
+    for root, _dirs, _files in os.walk(BASE_PATH, topdown=False):
         if os.path.abspath(root) == os.path.abspath(BASE_PATH):
             continue
         if not os.listdir(root):

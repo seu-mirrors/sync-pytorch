@@ -36,10 +36,10 @@ def build_uv_sources_snippet(platform):
     return "\n".join(lines)
 
 
-def update_human_index(compute_platforms):
+def update_human_index(platforms):
     os.makedirs(os.path.join(BASE_PATH, "whl"), 0o755, exist_ok=True)
     platform_list_items = "    " + "\n    ".join(
-        f'<li><a href="{platform}">{platform}</a></li>' for platform in compute_platforms
+        f'<li><a href="{platform}">{platform}</a></li>' for platform in platforms
     )
     top_html = (TOP_INDEX_TEMPLATE
                 .replace("__CSS__", HUMAN_INDEX_CSS)
@@ -47,7 +47,7 @@ def update_human_index(compute_platforms):
     with open(os.path.join(BASE_PATH, "whl", "index.html"), "w", encoding="utf-8") as fhandle:
         fhandle.write(top_html)
 
-    for platform in compute_platforms:
+    for platform in platforms:
         os.makedirs(os.path.join(BASE_PATH, "whl", platform), 0o755, exist_ok=True)
         uv_toml = build_uv_sources_snippet(platform)
         platform_html = (PLATFORM_INDEX_TEMPLATE

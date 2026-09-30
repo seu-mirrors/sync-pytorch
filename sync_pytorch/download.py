@@ -11,19 +11,19 @@ def truncate_file(path):
     open(path, "w").close()
 
 
-def export_aria2c():
+def write_aria2_input():
     seen_local_paths = set()
     with open(ARIA2_INPUT_PATH, "w") as fhandle:
-        for info in state.download_queue:
+        for task in state.download_queue:
             # dedupe_shared_files 会把多平台重复的文件统一指向 whl/<filename>，
             # 这里按 local_path 去重，同一份内容只写一条 aria2 任务。
-            local_path = os.path.normpath(info["local_path"])
+            local_path = os.path.normpath(task["local_path"])
             if local_path in state.previous_run_files or local_path in seen_local_paths:
                 continue
             seen_local_paths.add(local_path)
-            fhandle.write(info["url"] + "\n" + "    out=" + local_path + "\n")
-            if "sha256" in info and info["sha256"]:
-                fhandle.write("    checksum=sha-256=" + info["sha256"] + "\n")
+            fhandle.write(task["url"] + "\n" + "    out=" + local_path + "\n")
+            if "sha256" in task and task["sha256"]:
+                fhandle.write("    checksum=sha-256=" + task["sha256"] + "\n")
 
 
 def parse_aria2_length_mismatch_uris(log_path):
@@ -33,9 +33,9 @@ def parse_aria2_length_mismatch_uris(log_path):
         return uris
     with open(log_path, "r", errors="replace") as fhandle:
         for line in fhandle:
-            m = re.search(r"errorCode=1 URI=(\S+)", line)
-            if m:
-                last_uri = m.group(1)
+            uri_match = re.search(r"errorCode=1 URI=(\S+)", line)
+            if uri_match:
+                last_uri = uri_match.group(1)
                 continue
             if "total length mismatch" in line and last_uri:
                 if last_uri not in uris:
@@ -44,20 +44,20 @@ def parse_aria2_length_mismatch_uris(log_path):
     return uris
 
 
-def load_pkglist_uri_map(pkglist_path):
+def load_aria2_input_uri_map(input_path):
     uri_map = {}
-    if not os.path.exists(pkglist_path):
+    if not os.path.exists(input_path):
         return uri_map
     current_uri = None
-    with open(pkglist_path, "r") as fhandle:
+    with open(input_path, "r") as fhandle:
         for line in fhandle:
             line = line.rstrip("\n")
             if not line:
                 continue
             if line.startswith(" "):
-                value = line.lstrip()
-                if current_uri is not None and value.startswith("out="):
-                    uri_map[current_uri] = value.split("=", 1)[1]
+                option = line.lstrip()
+                if current_uri is not None and option.startswith("out="):
+                    uri_map[current_uri] = option.split("=", 1)[1]
             else:
                 current_uri = line
     return uri_map
@@ -69,20 +69,20 @@ def cleanup_aria2_partial(uri, uri_map):
         logging.warning(f"could not resolve local path for length-mismatch URI: {uri}")
         return False
     removed = False
-    for p in (local_path, local_path + ".aria2"):
-        if os.path.exists(p):
+    for path in (local_path, local_path + ".aria2"):
+        if os.path.exists(path):
             try:
-                os.remove(p)
-                logging.info(f"removed stale partial file: {p}")
+                os.remove(path)
+                logging.info(f"removed stale partial file: {path}")
                 removed = True
             except OSError as err:
-                logging.warning(f"failed to remove {p}: {err}")
+                logging.warning(f"failed to remove {path}: {err}")
     return removed
 
 
 def perform_download():
     log_path = os.path.join(BASE_PATH, "aria2.log")
-    uri_map = load_pkglist_uri_map(ARIA2_INPUT_PATH)
+    uri_map = load_aria2_input_uri_map(ARIA2_INPUT_PATH)
     max_attempts = 5
     for attempt in range(1, max_attempts + 1):
         truncate_file(log_path)
