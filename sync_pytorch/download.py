@@ -7,11 +7,18 @@ from . import state
 from .config import ARIA2_INPUT_PATH, BASE_PATH, USER_AGENT
 
 
-def truncate_file(path):
+def truncate_file(path: str) -> None:
+    """清空文件内容（不存在则创建）。"""
     open(path, "w").close()
 
 
-def write_aria2_input():
+def write_aria2_input() -> None:
+    """把下载队列导出为 aria2c 输入文件（packagelist.txt）。
+
+    - 已存在于上一轮（state.previous_run_files）或已写过的不重复写；
+    - 每个任务两行：URL 行 + 缩进的 out=/checksum= 配置行。
+    """
+    # 已在本次输入文件中出现过的本地路径
     seen_local_paths = set()
     with open(ARIA2_INPUT_PATH, "w") as fhandle:
         for task in state.download_queue:
@@ -26,7 +33,19 @@ def write_aria2_input():
                 fhandle.write("    checksum=sha-256=" + task["sha256"] + "\n")
 
 
-def parse_aria2_length_mismatch_uris(log_path):
+def parse_aria2_length_mismatch_uris(log_path: str) -> list[str]:
+    """从 aria2 日志中解析出现 "total length mismatch" 的 URI。
+
+    aria2 先在 "errorCode=1 URI=<uri>" 行给出出错的 URI，随后另起一行记录
+    中止原因；因此用 last_uri 暂存最近一次错误 URI，遇到 mismatch 行时配对。
+
+    Args:
+        log_path: aria2 日志文件路径。
+
+    Returns:
+        去重后的 URI 列表；日志不存在时为空列表。
+    """
+    # uris 为命中的 URI 列表；last_uri 为最近一次 errorCode=1 的 URI
     uris = []
     last_uri = None
     if not os.path.exists(log_path):
@@ -44,10 +63,21 @@ def parse_aria2_length_mismatch_uris(log_path):
     return uris
 
 
-def load_aria2_input_uri_map(input_path):
-    uri_map = {}
+def load_aria2_input_uri_map(input_path: str) -> dict[str, str]:
+    """解析 aria2 输入文件，返回 {URL: 本地 out= 路径} 映射。
+
+    用于按 URI 反查本地文件位置，清理续传残留。
+
+    Args:
+        input_path: aria2 输入文件（packagelist.txt）路径。
+
+    Returns:
+        URL 到本地路径的映射；文件不存在时为空字典。
+    """
+    uri_map: dict[str, str] = {}
     if not os.path.exists(input_path):
         return uri_map
+    # current_uri 为最近一个任务行（URL）的地址
     current_uri = None
     with open(input_path, "r") as fhandle:
         for line in fhandle:
@@ -55,6 +85,7 @@ def load_aria2_input_uri_map(input_path):
             if not line:
                 continue
             if line.startswith(" "):
+                # 缩进行为任务配置，如 "    out=/data/xxx.whl"
                 option = line.lstrip()
                 if current_uri is not None and option.startswith("out="):
                     uri_map[current_uri] = option.split("=", 1)[1]
@@ -63,7 +94,16 @@ def load_aria2_input_uri_map(input_path):
     return uri_map
 
 
-def cleanup_aria2_partial(uri, uri_map):
+def cleanup_aria2_partial(uri: str, uri_map: dict[str, str]) -> bool:
+    """删除指定 URI 对应的残缺文件和 .aria2 控制文件。
+
+    Args:
+        uri: 出错的下载地址。
+        uri_map: load_aria2_input_uri_map() 得到的 URI→本地路径映射。
+
+    Returns:
+        是否有文件被删除；URI 无法解析出本地路径或删除失败时返回 False。
+    """
     local_path = uri_map.get(uri)
     if not local_path:
         logging.warning(f"could not resolve local path for length-mismatch URI: {uri}")
@@ -80,7 +120,12 @@ def cleanup_aria2_partial(uri, uri_map):
     return removed
 
 
-def perform_download():
+def perform_download() -> None:
+    """调用 aria2c 执行下载，失败时清理断点并重试。
+
+    最多重试 max_attempts 次；若失败由 "total length mismatch" 引起，
+    先删除对应残缺文件和 .aria2 控制文件再重试；最终仍失败则以 aria2 的退出码结束进程。
+    """
     log_path = os.path.join(BASE_PATH, "aria2.log")
     uri_map = load_aria2_input_uri_map(ARIA2_INPUT_PATH)
     max_attempts = 5
@@ -96,6 +141,7 @@ def perform_download():
         status = os.system(cmd)
         if status == 0:
             return
+        # mismatch_uris 为本轮因长度不符而失败的 URI 列表
         mismatch_uris = parse_aria2_length_mismatch_uris(log_path)
         if mismatch_uris:
             for uri in mismatch_uris:

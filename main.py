@@ -6,7 +6,8 @@ import sys
 from sync_pytorch import config, crawl, dedupe, download, file_state, human_index, metadata, summary
 
 
-def parse_show_progress():
+def parse_show_progress() -> bool:
+    """解析 --show-progress 参数；tqdm 不可用时提示并关闭进度条。"""
     if "--show-progress" not in sys.argv:
         return False
     try:
@@ -17,7 +18,13 @@ def parse_show_progress():
     return True
 
 
-def main():
+def main() -> None:
+    """执行一次完整同步。
+
+    流程：初始化环境 → 平台发现 → 人类可读索引 → 爬取各平台索引 →
+    metadata 探测 → 跨平台去重与链接改写 → 清理过期文件/空目录 →
+    导出并执行 aria2 下载 → 输出摘要并持久化状态。
+    """
     # ensure umask
     os.umask(0o22)
 

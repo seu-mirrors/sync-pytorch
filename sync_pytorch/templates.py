@@ -1,4 +1,12 @@
-"""人类可读索引页（whl/ 下）使用的 HTML/CSS/JS 模板。"""
+"""人类可读索引页（whl/ 下）使用的 HTML/CSS/JS 模板。
+
+模板占位符：
+  __CSS__              HUMAN_INDEX_CSS
+  __JS__               HUMAN_INDEX_JS
+  __PLATFORM__         平台名（cpu/cu126/...）
+  __PLATFORM_LIST__    总览页的平台链接列表
+  __UV_TOML_SNIPPET__  build_uv_sources_snippet() 生成的 uv 配置片段
+"""
 from .config import MIRROR_WHL_URL
 
 HUMAN_INDEX_CSS = """    body {

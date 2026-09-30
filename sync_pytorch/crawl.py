@@ -16,7 +16,7 @@ from .config import (
 )
 from .http import SESSION
 
-# 索引页中的 <a href="...">name</a>
+# 索引页中的 <a href="...">name</a>；group(1)=链接地址，group(2)=链接文本
 INDEX_LINK_PATTERN = re.compile(r"<a href=\"(\S*)\".*>(\S*)</a>")
 # 平台目录链接 (cpu/ cu126/ rocm7.2/ 等)
 PLATFORM_DIR_PATTERN = re.compile(r"^(cpu|cu\d+|rocm[\d.]+)/?$")
@@ -24,19 +24,29 @@ PLATFORM_DIR_PATTERN = re.compile(r"^(cpu|cu\d+|rocm[\d.]+)/?$")
 PRE_RELEASE_PATTERN = re.compile(r"(?:\.dev\d)|(?:[abrc]\d)")
 
 
-def fetch_pypi_package(pkg_name, pkg_local_dir):
-    # download.pytorch.org/whl/cpu/<pkg>/ returns 403 for every wheel, so pull
-    # the package from PyPI instead and serve it under the cpu index.
+def fetch_pypi_package(pkg_name: str, pkg_local_dir: str) -> None:
+    """从 PyPI 拉取包的全部发布文件，并为 cpu 索引生成本地 index.html。
+
+    download.pytorch.org/whl/cpu/<pkg>/ 对所有 wheel 返回 403，
+    因此这些包改从 PyPI 获取，但仍登记到 cpu 索引下。
+
+    Args:
+        pkg_name: PyPI 包名。
+        pkg_local_dir: 包页面的本地目录（whl/cpu/simple/<pkg>）。
+    """
     logging.info(f"fetching {pkg_name} from PyPI for cpu index -> {pkg_local_dir}")
     try:
         response = SESSION.get(PYPI_JSON_URL + pkg_name + "/json", timeout=REQUEST_TIMEOUT)
         response.raise_for_status()
+        # PyPI JSON：{"releases": {版本号: [文件信息, ...], ...}}
         pypi_data = response.json()
     except Exception:
+        # PyPI 拉取失败只记录日志并返回，不中断整体同步
         logging.exception(f"failed to fetch {pkg_name} from PyPI")
         logging.error(traceback.format_exc())
         return
 
+    # 过滤后的待下载任务；元素字段见 state.download_queue 注释
     entries = []
     for version, files in pypi_data.get("releases", {}).items():
         if PRE_RELEASE_PATTERN.search(version):
@@ -57,10 +67,12 @@ def fetch_pypi_package(pkg_name, pkg_local_dir):
 
     entries.sort(key=lambda entry: entry["name"])
     os.makedirs(pkg_local_dir, 0o755, exist_ok=True)
+    # 本地索引页的 <a> 行
     index_lines = []
     for entry in entries:
         state.download_queue.append(entry)
         logging.debug(f"fetch_info = {entry}")
+        # href 带 #sha256= 校验片段；attrs 为可选的 data-requires-python
         href = entry["name"]
         if entry["sha256"]:
             href += f"#sha256={entry['sha256']}"
@@ -75,7 +87,12 @@ def fetch_pypi_package(pkg_name, pkg_local_dir):
     logging.info(f"added {len(entries)} {pkg_name} files from PyPI into cpu index")
 
 
-def sync_platform_index(platform=""):
+def sync_platform_index(platform: str = "") -> None:
+    """爬取指定平台的 whl 索引。
+
+    Args:
+        platform: 平台名（如 cpu/cu126）；空字符串表示上游根索引 whl/。
+    """
     logging.info(f"current platform = {platform}")
     os.makedirs(os.path.join(BASE_PATH, "whl"), 0o755, exist_ok=True)
     local_dir = os.path.join(BASE_PATH, "whl", platform, "simple")
@@ -86,11 +103,30 @@ def sync_platform_index(platform=""):
     crawl_index_page(url, local_dir, platform)
 
 
-def enqueue_dist_file(item_name, item_url, anchor_html, platform=""):
+def enqueue_dist_file(item_name: str, item_url: str, anchor_html: str, platform: str = "") -> None:
+    """登记一个文件下载任务，并按需登记其 .metadata 任务。
+
+    处理逻辑：
+    - 从 item_url 拆出 #sha256 片段，得到干净的下载地址；
+    - PyTorch 系主机（*.pytorch.org）的绝对 URL 改写回 UPSTREAM_BASE_URL 取源
+      （R2 镜像可能滞后于 S3，导致 sha256 对不上）；
+    - 非 PyTorch 绝对 URL（如 PyPI 回退的 files.pythonhosted.org）保留下载地址，
+      但本地路径压平为 whl/<platform>/<filename>；
+    - 根相对 URL（/whl/...）补全为绝对地址；
+    - anchor_html 带 data-dist-info-metadata 时直接登记 .metadata 下载，
+      否则放入 state.metadata_check_queue 等待 HEAD 探测。
+
+    Args:
+        item_name: 链接文本，即文件名。
+        item_url: 原始链接地址（可能带 #sha256= 片段）。
+        anchor_html: 完整 <a ...> 标签，用于提取 metadata 校验值。
+        platform: 当前平台名（如 cpu/cu126），根索引为空字符串。
+    """
     filename = item_name
     sha256 = None
     download_url = item_url
     if "#" in download_url:
+        # url_parts[0] 为去片段后的地址，url_parts[1] 为 sha256 值
         url_parts = download_url.split("#sha256=")
         download_url = url_parts[0]
         sha256 = url_parts[1]
@@ -118,6 +154,7 @@ def enqueue_dist_file(item_name, item_url, anchor_html, platform=""):
     # dedupe by local_path so the same wheel referenced from multiple platform
     # indexes still lands under each platform's directory instead of being skipped
     # after the first encounter (e.g. filelock is referenced by both cpu and cu124).
+    # relative_path 为相对 BASE_PATH 的落盘路径（如 whl/cpu/torch-xxx.whl）
     if relative_path in state.processed_whl_paths:
         logging.debug(f"skip processed relative_path = {relative_path}")
         return
@@ -130,6 +167,7 @@ def enqueue_dist_file(item_name, item_url, anchor_html, platform=""):
         "sha256": sha256
     })
     logging.debug(f"fetch_info = {state.download_queue[-1]}")
+    # data-dist-info-metadata="sha256=..."：索引已给出 metadata 校验值
     metadata_hash = re.match(r"data-dist-info-metadata=\"sha256=([\S]*)\"", anchor_html)
     if metadata_hash:
         state.download_queue.append({
@@ -148,13 +186,29 @@ def enqueue_dist_file(item_name, item_url, anchor_html, platform=""):
         logging.debug(f"search_metadata_info = {state.metadata_check_queue[-1]}")
 
 
-def crawl_index_page(url, local_dir, platform=""):
+def crawl_index_page(url: str, local_dir: str, platform: str = "") -> None:
+    """递归抓取并改写一个上游索引页，解析其中的目录/文件链接。
+
+    - 保存改写后的页面到 local_dir/index.html：把 /whl 与 download-r2 链接
+      指向 MIRROR_WHL_URL，并把 PyPI 回退链接压平到 whl/<platform>/<file>；
+    - 平台目录链接（cpu/cu126/...）直接跳过；
+    - 普通目录递归抓取；cpu 下的 PyPI 替换包改走 fetch_pypi_package；
+    - 文件链接交给 enqueue_dist_file 登记。
+
+    出现异常时记录日志并 os._exit(1)，让任务平台感知失败。
+
+    Args:
+        url: 上游索引页地址。
+        local_dir: 本地保存目录。
+        platform: 当前平台名，根索引为空字符串。
+    """
     logging.info(f"current url = {url} local_dir = {local_dir}")
     try:
         response = SESSION.get(url, timeout=REQUEST_TIMEOUT)
         if response.status_code != 200:
             logging.info(f"skip non-200 url (status={response.status_code}): {url}")
             return
+        # 上游原始页面（解析链接用）；rewritten 为替换镜像地址后的页面（保存用）
         html_content = response.text
         os.makedirs(local_dir, 0o755, exist_ok=True)
         with open(os.path.join(local_dir, "index.html"), "w") as fhandle:
@@ -172,6 +226,7 @@ def crawl_index_page(url, local_dir, platform=""):
             fhandle.write(rewritten)
         # 搜索包或者whl
         search_pos = 0
+        # match / next_match 为 INDEX_LINK_PATTERN 的匹配对象
         match = INDEX_LINK_PATTERN.search(html_content, search_pos)
         while match:
             search_pos = match.span(0)[1]
@@ -187,6 +242,7 @@ def crawl_index_page(url, local_dir, platform=""):
             # certifi
             # certifi-2022.12.7-py3-none-any.whl
 
+            # anchor_html 为完整 <a ...> 标签（提取 metadata 校验值用）
             anchor_html = match.group(0)
             item_url = match.group(1)
             item_name = match.group(2)
