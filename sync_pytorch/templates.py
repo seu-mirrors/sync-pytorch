@@ -1,5 +1,5 @@
 """人类可读索引页（whl/ 下）使用的 HTML/CSS/JS 模板。"""
-MIRROR_WHL_URL = "https://mirrors.seu.edu.cn/pytorch/whl"
+from .config import MIRROR_WHL_URL
 
 HUMAN_INDEX_CSS = """    body {
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
