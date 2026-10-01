@@ -11,6 +11,9 @@ uv run main.py --show-progress # 可选：用 tqdm 展示 metadata 探测进度
 
 脚本可重复执行（幂等）：每轮根据上游索引重建本地索引，下载缺失文件，并清理不再引用的文件。
 
+同步目录根部的 `index.html` 是对外的人类可读索引页（平台索引表 / 配置帮助 / 调试日志链接），
+对应 `https://mirrors.seu.edu.cn/pytorch/`；旧地址 `/pytorch/whl/` 会被跳转到该页。
+
 ## 项目结构
 
 ```
@@ -23,8 +26,8 @@ uv run main.py --show-progress # 可选：用 tqdm 展示 metadata 探测进度
 │   ├── state.py             # 一次运行内的共享状态（下载队列、锁、文件集合）
 │   ├── crawl.py             # 爬取上游 whl 索引并生成待下载任务（含 PyPI 回退）
 │   ├── metadata.py          # metadata HEAD 探测线程 + 计算平台发现
-│   ├── templates.py         # 人类可读索引页的 HTML/CSS/JS 模板
-│   ├── human_index.py       # 生成总览页/平台页与 uv 配置片段
+│   ├── templates.py         # 人类可读索引页（同步根目录 index.html）的 HTML/CSS/JS 模板
+│   ├── human_index.py       # 生成索引页（平台表/配置帮助/调试日志）、清理旧帮助页、uv 配置片段
 │   ├── dedupe.py            # 跨平台重复文件去重与索引 href 重写
 │   ├── file_state.py        # existed_files.bin 读写、过期文件/空目录清理
 │   ├── download.py          # aria2 输入导出、下载执行/重试、断点清理
@@ -41,7 +44,7 @@ uv run main.py --show-progress # 可选：用 tqdm 展示 metadata 探测进度
 
 1. `config.ensure_working_dir()` / `setup_logging()`：创建同步目录、配置日志；
 2. `metadata.fetch_compute_platforms()`：从 PyTorch 官网脚本解析计算平台列表（cpu/cu126/rocm7.2…）；
-3. `human_index.update_human_index()`：生成 `whl/index.html` 及各平台页；
+3. `human_index.update_human_index()`：生成同步根目录 `index.html`（平台索引表 + 默认折叠的配置帮助、调试日志区块），并把 `whl/index.html` 覆写为跳转页、删除旧平台帮助页；
 4. `file_state.load_previous_run_files()`：加载上一轮文件记录；
 5. `crawl.sync_platform_index()`（逐平台）：递归爬取上游索引，填充 `state.download_queue` 与 `state.metadata_check_queue`；
 6. `metadata.check_metadata_availability()`：多线程 HEAD 探测 metadata，命中项并入下载队列；
@@ -61,6 +64,7 @@ uv run main.py --show-progress # 可选：用 tqdm 展示 metadata 探测进度
 | 需要改从 PyPI 获取的包 | `config.PYPI_REPLACEMENT_PACKAGES` 与 `crawl.fetch_pypi_package` |
 | 平台目录过滤、URL 改写、metadata 登记规则 | `crawl.py`（`enqueue_dist_file` / `crawl_index_page`） |
 | 索引页样式、安装命令文案与占位符 | `templates.py`（占位符见模块 docstring） |
+| 索引页结构（平台表 / 配置帮助 / 调试日志）、旧帮助页清理 | `human_index.py` |
 | uv 配置片段生成规则（`marker` / `explicit`） | `human_index.build_uv_sources_snippet` |
 | 去重判定与 href 重写 | `dedupe.py` |
 | 历史文件格式、清理策略 | `file_state.py` |
@@ -78,11 +82,18 @@ uv run main.py --show-progress # 可选：用 tqdm 展示 metadata 探测进度
 
 | 产物 | 用途 |
 |---|---|
+| `index.html`（同步根目录） | 人类可读索引页：平台索引表 / 配置帮助 / 调试日志链接 |
+| `whl/index.html` | 兼容旧地址 `/pytorch/whl/` 的跳转页（meta refresh + canonical，无帮助内容） |
 | `whl/<platform>/simple/`、`whl/<filename>` | PEP 503 索引与文件，直接对外服务 |
 | `packagelist.txt` | aria2c 输入文件 |
 | `summary.txt` | 镜像站运行状态检查读取 |
 | `existed_files.bin` | 上一轮文件记录（pickle，兼容旧 dict 格式） |
 | `script.log` / `aria2.log` | 调试日志 |
+
+> 旧版平台帮助页 `whl/<platform>/index.html` 已废弃：每轮同步由
+> `human_index.remove_legacy_platform_pages()` 删除，帮助内容统一收敛到根目录 `index.html`。
+> 只处理 `whl/` 下第一层的真实目录（跳过软链接与保留目录名 `simple`），
+> `whl/<platform>/simple/**/index.html` 不受影响。
 
 ### 编码约定
 
