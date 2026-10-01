@@ -14,6 +14,7 @@ COPY pyproject.toml uv.lock .
 RUN uv sync
 
 COPY main.py .
+COPY sync_pytorch/ ./sync_pytorch/
 
 COPY scripts/run.sh .
 
