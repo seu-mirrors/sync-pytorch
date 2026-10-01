@@ -2,6 +2,7 @@
 import json
 import logging
 import re
+import sys
 import threading
 import traceback
 
@@ -91,24 +92,38 @@ def fetch_compute_platforms() -> list[str]:
     - "cuda" + X.Y → cuXY（去掉小数点）；
     - 其余（如 "rocm" + "7.2"）直接拼接。
 
+    平台列表是后续爬取与清理的前提：拿不到平台时继续运行会以空任务清单触发
+    prune_stale_files()，把上一轮记录的文件全部删除，因此异常情况统一记录日志
+    并以退出码 1 结束进程，让任务平台感知失败。
+
     Returns:
-        计算平台名列表；解析失败时返回已收集到的部分（可能为空）。
+        计算平台名列表（按上游 release 顺序，可能含重复平台）。
+
+    Raises:
+        SystemExit: 请求失败、HTTP 状态异常、页面中找不到 version_map、
+            JSON 解析失败或最终平台列表为空。
     """
-    platforms = []
-    response = http.SESSION.get(PLATFORM_SOURCE_URL, timeout=REQUEST_TIMEOUT)
-    # version_map_match.group(1) 为 version_map 的 JSON 文本
-    version_map_match = re.search("version_map=({.*})", response.text)
-    if version_map_match:
-        try:
-            version_map = json.loads(version_map_match.group(1))
-            for release in version_map["release"].values():
-                if release[0] == "cpu":
-                    platforms.append("cpu")
-                elif release[0] == "cuda":
-                    platforms.append("cu" + release[1].replace(".", ""))
-                else:
-                    platforms.append(release[0] + release[1])
-        except Exception as err:
-            logging.exception("failed to parse platform info")
-            logging.error(traceback.format_exc())
+    try:
+        response = http.SESSION.get(PLATFORM_SOURCE_URL, timeout=REQUEST_TIMEOUT)
+        response.raise_for_status()
+        # version_map_match.group(1) 为 version_map 的 JSON 文本
+        version_map_match = re.search("version_map=({.*})", response.text)
+        if not version_map_match:
+            raise ValueError("version_map not found in upstream quick-start script")
+        version_map = json.loads(version_map_match.group(1))
+        platforms = []
+        for release in version_map["release"].values():
+            if release[0] == "cpu":
+                platforms.append("cpu")
+            elif release[0] == "cuda":
+                platforms.append("cu" + release[1].replace(".", ""))
+            else:
+                platforms.append(release[0] + release[1])
+    except Exception as err:
+        logging.exception(f"failed to fetch compute platforms from {PLATFORM_SOURCE_URL}: {err}")
+        logging.error(traceback.format_exc())
+        sys.exit(1)
+    if not platforms:
+        logging.error(f"no compute platforms found in {PLATFORM_SOURCE_URL}")
+        sys.exit(1)
     return platforms

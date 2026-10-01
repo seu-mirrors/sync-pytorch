@@ -43,7 +43,7 @@ uv run main.py --show-progress # 可选：用 tqdm 展示 metadata 探测进度
 `main.py` 中 `main()` 的调用顺序即数据流：
 
 1. `config.ensure_working_dir()` / `setup_logging()`：创建同步目录、配置日志；
-2. `metadata.fetch_compute_platforms()`：从 PyTorch 官网脚本解析计算平台列表（cpu/cu126/rocm7.2…）；
+2. `metadata.fetch_compute_platforms()`：从 PyTorch 官网脚本解析计算平台列表（cpu/cu126/rocm7.2…）；请求/解析失败或平台列表为空时记录日志并以退出码 1 结束（避免空任务清单触发误删）；
 3. `human_index.update_human_index()`：生成同步根目录 `index.html`（平台索引表 + 默认折叠的配置帮助、调试日志区块），并把 `whl/index.html` 覆写为跳转页、删除旧平台帮助页；
 4. `file_state.load_previous_run_files()`：加载上一轮文件记录；
 5. `crawl.sync_platform_index()`（逐平台）：递归爬取上游索引，填充 `state.download_queue` 与 `state.metadata_check_queue`；
@@ -99,7 +99,7 @@ uv run main.py --show-progress # 可选：用 tqdm 展示 metadata 探测进度
 
 - 函数/类需有中文 docstring，公开函数签名带类型标注；
 - 不要在 import 期产生副作用：建目录、配置日志等只在 `main()` 中显式调用；
-- 异常行为保持现状：`crawl` 抓取失败会 `os._exit(1)`，`perform_download` 最终失败以 aria2 退出码结束进程，便于任务平台感知失败；
+- 异常行为保持现状：`crawl` 抓取失败会 `os._exit(1)`，`metadata.fetch_compute_platforms` 取不到平台时 `sys.exit(1)`（平台列表为空会让后面的 `prune_stale_files` 把上一轮文件全部删除，必须中止），`perform_download` 最终失败以 aria2 退出码结束进程，便于任务平台感知失败；
 - 需要并发时参考 `metadata.MetadataCheckThread`（每线程独立会话 + 锁保护共享计数）；
 - 新增/删除模块后，同步更新本文档的结构与“常见改动”表；`Dockerfile` 已整包拷贝 `sync_pytorch/`，通常无需改动。
 
